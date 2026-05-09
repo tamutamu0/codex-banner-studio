@@ -603,37 +603,73 @@ textarea { min-height: 72px; resize: vertical }
 .productCard span { align-self: end; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .productCard small { color: var(--sub); font-size: 11px }
 
-.brandManager {
+.brandSelectRow {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-  padding: 10px;
+  align-items: end;
+}
+.brandSelectRow button {
+  min-height: 42px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+.brandModal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.brandAdd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.brandAdd button {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+.brandList { display: grid; gap: 6px }
+.brandItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 34px;
+  gap: 6px;
+  align-items: center;
+  min-height: 44px;
+  padding: 6px;
   border: 1px solid var(--line);
   border-radius: var(--r);
   background: var(--raised);
 }
-.brandManagerTop { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, .8fr); gap: 10px; align-items: end }
-.brandAdd { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: end }
-.brandAdd button, .brandChip button { min-height: 34px; padding: 0 10px; font-size: 12px }
-.brandChips { display: flex; flex-wrap: wrap; gap: 6px }
-.brandChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 30px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  background: var(--panel);
+.brandItem.editing { grid-template-columns: minmax(0, 1fr) auto auto }
+.brandItem input { min-width: 0; padding: 9px 10px; font-size: 13px }
+.brandItem button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
 }
-.brandChip > button:first-child {
+.brandNameButton {
+  justify-content: flex-start;
+  overflow: hidden;
   border-color: transparent;
   background: transparent;
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 700;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.brandChip > button:last-child { color: #dc2626 }
-.brandChip.editing { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto; width: min(100%, 420px) }
-.brandChip input { min-width: 0; padding: 8px 10px; font-size: 13px }
+.brandDeleteButton {
+  width: 32px;
+  padding: 0 !important;
+  color: var(--red);
+}
 
 .dropZone {
   display: grid; place-items: center; gap: 6px;

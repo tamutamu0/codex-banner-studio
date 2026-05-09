@@ -213,6 +213,7 @@ export default function Home() {
   const [newBrandDraft, setNewBrandDraft] = useState("");
   const [editingBrandId, setEditingBrandId] = useState("");
   const [editingBrandName, setEditingBrandName] = useState("");
+  const [brandModalOpen, setBrandModalOpen] = useState(false);
   const [newProductName, setNewProductName] = useState("");
   const [newProductNotes, setNewProductNotes] = useState("");
   const [newProductPriceInfo, setNewProductPriceInfo] = useState("");
@@ -353,6 +354,7 @@ export default function Home() {
       setBrands(data.brands);
       setNewBrandName(name);
       setNewBrandDraft("");
+      setBrandModalOpen(false);
       setStatus("ブランドを追加しました");
     } catch (error) {
       setStatus("ブランド追加エラー");
@@ -2144,35 +2146,11 @@ export default function Home() {
                   </div>
                 )}
               </div>
-              <div className="brandManager">
-                <div className="brandManagerTop">
-                  <label>ブランド<select value={newBrandName} onChange={(event) => setNewBrandName(event.target.value)}>
+              <div className="brandSelectRow">
+                <label>ブランド<select value={newBrandName} onChange={(event) => setNewBrandName(event.target.value)}>
                     {brandOptions.map((brand) => <option value={brand} key={brand}>{brand}</option>)}
                   </select></label>
-                  <div className="brandAdd">
-                    <input value={newBrandDraft} onChange={(event) => setNewBrandDraft(event.target.value)} placeholder="ブランド追加" />
-                    <button type="button" onClick={createBrand}>追加</button>
-                  </div>
-                </div>
-                <div className="brandChips">
-                  {brands.map((brand) => (
-                    <span className={`brandChip ${editingBrandId === brand.id ? "editing" : ""}`} key={brand.id}>
-                      {editingBrandId === brand.id ? (
-                        <>
-                          <input value={editingBrandName} onChange={(event) => setEditingBrandName(event.target.value)} />
-                          <button type="button" onClick={updateBrand}>保存</button>
-                          <button type="button" onClick={() => { setEditingBrandId(""); setEditingBrandName(""); }}>取消</button>
-                        </>
-                      ) : (
-                        <>
-                          <button type="button" onClick={() => setNewBrandName(brand.name)}>{brand.name}</button>
-                          <button type="button" title="ブランド名を編集" aria-label={`${brand.name}を編集`} onClick={() => { setEditingBrandId(brand.id); setEditingBrandName(brand.name); }}>編集</button>
-                          <button type="button" title="ブランドを削除" aria-label={`${brand.name}を削除`} onClick={() => deleteBrand(brand)}>×</button>
-                        </>
-                      )}
-                    </span>
-                  ))}
-                </div>
+                <button type="button" onClick={() => setBrandModalOpen(true)}>管理</button>
               </div>
               <label>商品名<input value={newProductName} onChange={(event) => setNewProductName(event.target.value)} placeholder="例: スカルプケアシャンプー" /></label>
               <label>価格情報<input value={newProductPriceInfo} onChange={(event) => setNewProductPriceInfo(event.target.value)} placeholder="例: 初回価格1,000円(税込)" /></label>
@@ -2197,6 +2175,39 @@ export default function Home() {
               </div>
             </div>
           </section>
+          {brandModalOpen && (
+            <div className="preview-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setBrandModalOpen(false); }}>
+              <div className="brandModal">
+                <div className="sectionHead">
+                  <h2>ブランド管理</h2>
+                  <button type="button" onClick={() => setBrandModalOpen(false)}>閉じる</button>
+                </div>
+                <div className="brandAdd">
+                  <input value={newBrandDraft} onChange={(event) => setNewBrandDraft(event.target.value)} placeholder="ブランド名を追加" />
+                  <button type="button" onClick={createBrand}>追加</button>
+                </div>
+                <div className="brandList">
+                  {brands.map((brand) => (
+                    <div className={`brandItem ${editingBrandId === brand.id ? "editing" : ""}`} key={brand.id}>
+                      {editingBrandId === brand.id ? (
+                        <>
+                          <input value={editingBrandName} onChange={(event) => setEditingBrandName(event.target.value)} />
+                          <button type="button" onClick={updateBrand}>保存</button>
+                          <button type="button" onClick={() => { setEditingBrandId(""); setEditingBrandName(""); }}>取消</button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="brandNameButton" type="button" onClick={() => { setNewBrandName(brand.name); setBrandModalOpen(false); }}>{brand.name}</button>
+                          <button type="button" onClick={() => { setEditingBrandId(brand.id); setEditingBrandName(brand.name); }}>編集</button>
+                          <button className="brandDeleteButton" type="button" aria-label={`${brand.name}を削除`} title="削除" onClick={() => deleteBrand(brand)}>×</button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
       </main>
