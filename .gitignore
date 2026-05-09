@@ -24,6 +24,7 @@ public/master-images/*
 public/products/*
 public/data/brands.json
 public/data/products.json
+public/data/prompt-presets.json
 public/data/request-log.jsonl
 public/data/startup-log.txt
 

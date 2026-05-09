@@ -39,7 +39,7 @@ type Variant = {
 };
 
 type Mode = "codex" | "local-fallback";
-type Tab = "generate" | "products" | "library";
+type Tab = "generate" | "products" | "library" | "settings";
 
 type ApiDebug = {
   step?: string;
@@ -73,6 +73,16 @@ type CodexSettings = {
   effort: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
   serviceTier: "fast" | "auto";
 };
+type PromptStep = "ideas" | "sheets" | "final";
+type PromptPreset = {
+  id: string;
+  step: PromptStep;
+  name: string;
+  template: string;
+  builtIn?: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
 type HistoryRecord = {
   id: string;
   createdAt: string;
@@ -89,6 +99,41 @@ const INITIAL_BRAND_OPTIONS = (process.env.NEXT_PUBLIC_BRAND_OPTIONS || "Brand A
   .map((brand) => brand.trim())
   .filter(Boolean);
 const DEFAULT_BRAND = INITIAL_BRAND_OPTIONS[0] || "";
+const promptStepLabels: Record<PromptStep, string> = {
+  ideas: "Step 1 案生成",
+  sheets: "Step 2 画像生成",
+  final: "Step 3 仕上げ",
+};
+const promptVariableHelp: Record<PromptStep, Array<{ key: string; label: string; description: string; required?: boolean }>> = {
+  ideas: [
+    { key: "count", label: "案数", description: "作成する訴求案の数", required: true },
+    { key: "priceInfo", label: "価格情報", description: "生成画面の価格文言" },
+    { key: "priceMode", label: "価格モード", description: "all / mixed / none" },
+    { key: "productInputJson", label: "商品入力JSON", description: "商品名、画像説明、メモなど", required: true },
+  ],
+  sheets: [
+    { key: "brandProductName", label: "商品名", description: "ブランド名 + 商品名", required: true },
+    { key: "count", label: "分割数", description: "1シートの候補数", required: true },
+    { key: "runCount", label: "画像枚数", description: "1回で作るPNG枚数", required: true },
+    { key: "totalCandidates", label: "候補総数", description: "分割数 × 画像枚数", required: true },
+    { key: "sheetBlocks", label: "案リスト", description: "Step1で作った訴求案・テイスト一覧", required: true },
+    { key: "productImageDescriptions", label: "画像説明", description: "商品画像ごとの説明", required: true },
+    { key: "productNotes", label: "商品メモ", description: "商品メモと追加指示", required: true },
+    { key: "priceInfo", label: "価格情報", description: "価格表示に使う文言", required: true },
+  ],
+  final: [
+    { key: "aspectRatio", label: "比率", description: "仕上げ生成の比率", required: true },
+    { key: "editBlock", label: "修正指示", description: "修正指示あり/なしの文章", required: true },
+    { key: "brandName", label: "ブランド", description: "商品ブランド", required: true },
+    { key: "productName", label: "商品名", description: "商品名", required: true },
+    { key: "priceInfo", label: "価格情報", description: "価格文言", required: true },
+    { key: "priceTreatmentText", label: "価格方針", description: "価格あり/なしの維持指示", required: true },
+    { key: "productImageDescriptions", label: "画像説明", description: "商品画像ごとの説明", required: true },
+  ],
+};
+const promptRequiredVariables = Object.fromEntries(
+  Object.entries(promptVariableHelp).map(([step, vars]) => [step, vars.filter((item) => item.required).map((item) => item.key)]),
+) as Record<PromptStep, string[]>;
 type ProgressState = {
   active: boolean;
   title: string;
@@ -253,6 +298,12 @@ export default function Home() {
   const [sheetRuns, setSheetRuns] = useState(2);
   const [imagesPerRequest, setImagesPerRequest] = useState(1);
   const [codexSettings, setCodexSettings] = useState<CodexSettings>({ model: "gpt-5.5", effort: "medium", serviceTier: "auto" });
+  const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
+  const [selectedPromptPresetIds, setSelectedPromptPresetIds] = useState<Record<PromptStep, string>>({ ideas: "default-ideas", sheets: "default-sheets", final: "default-final" });
+  const [promptDraftStep, setPromptDraftStep] = useState<PromptStep>("ideas");
+  const [promptDraftId, setPromptDraftId] = useState("");
+  const [promptDraftName, setPromptDraftName] = useState("");
+  const [promptDraftTemplate, setPromptDraftTemplate] = useState("");
   const [rateLimitInfo, setRateLimitInfo] = useState<RateLimitInfo | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [logs, setLogs] = useState<DebugEntry[]>([
@@ -294,8 +345,16 @@ export default function Home() {
   }, [selectedProduct, direction, priceInfo, priceMode]);
 
   const brandOptions = brands.map((brand) => brand.name);
+  const activePromptTemplates = useMemo(() => {
+    const findTemplate = (step: PromptStep) => promptPresets.find((preset) => preset.id === selectedPromptPresetIds[step] && preset.step === step)?.template;
+    return {
+      ideas: findTemplate("ideas"),
+      sheets: findTemplate("sheets"),
+      final: findTemplate("final"),
+    };
+  }, [promptPresets, selectedPromptPresetIds]);
 
-  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); }, []);
+  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); void loadPromptPresets(); }, []);
 
   useEffect(() => {
     void loadRateLimitInfo();
@@ -312,6 +371,14 @@ export default function Home() {
   useEffect(() => {
     newImagesRef.current = newImages;
   }, [newImages]);
+
+  useEffect(() => {
+    if (tab !== "settings" || promptDraftTemplate || !promptPresets.length) return;
+    const base = promptPresets.find((preset) => preset.step === promptDraftStep && preset.builtIn) || promptPresets.find((preset) => preset.step === promptDraftStep);
+    if (!base) return;
+    setPromptDraftName(`${base.name}のコピー`);
+    setPromptDraftTemplate(base.template);
+  }, [tab, promptDraftStep, promptDraftTemplate, promptPresets]);
 
   useEffect(() => () => {
     for (const row of newImagesRef.current) {
@@ -335,6 +402,124 @@ export default function Home() {
     const next = data.brands?.length ? data.brands : INITIAL_BRAND_OPTIONS.map((name, index) => ({ id: `initial-${index}`, name, createdAt: "" }));
     setBrands(next);
     setNewBrandName((current) => current || next[0]?.name || "");
+  }
+
+  async function loadPromptPresets() {
+    try {
+      const response = await fetch("/api/prompt-presets", { cache: "no-store" });
+      const data = (await response.json()) as { presets: PromptPreset[] };
+      const presets = data.presets || [];
+      setPromptPresets(presets);
+      setSelectedPromptPresetIds((current) => {
+        const stored = typeof window !== "undefined" ? window.localStorage.getItem("selectedPromptPresetIds") : "";
+        let parsed: Partial<Record<PromptStep, string>> = {};
+        try {
+          parsed = stored ? JSON.parse(stored) as Partial<Record<PromptStep, string>> : {};
+        } catch {
+          parsed = {};
+        }
+        const next = { ...current, ...parsed };
+        for (const step of Object.keys(promptStepLabels) as PromptStep[]) {
+          if (!presets.some((preset) => preset.step === step && preset.id === next[step])) next[step] = `default-${step}`;
+        }
+        return next;
+      });
+    } catch (error) {
+      addLog({ level: "error", title: "プロンプト設定の読み込み失敗", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  function promptPresetsFor(step: PromptStep) {
+    return promptPresets.filter((preset) => preset.step === step);
+  }
+
+  function promptMissingVariables(step: PromptStep, template = promptDraftTemplate) {
+    return promptRequiredVariables[step].filter((key) => !template.includes(`{{${key}}}`));
+  }
+
+  function choosePromptPreset(step: PromptStep, id: string) {
+    const next = { ...selectedPromptPresetIds, [step]: id };
+    setSelectedPromptPresetIds(next);
+    if (typeof window !== "undefined") window.localStorage.setItem("selectedPromptPresetIds", JSON.stringify(next));
+    setStatus(`${promptStepLabels[step]} のプリセットを切り替えました`);
+  }
+
+  function editPromptPreset(preset: PromptPreset, copy = false) {
+    setPromptDraftStep(preset.step);
+    setPromptDraftId(copy || preset.builtIn ? "" : preset.id);
+    setPromptDraftName(copy || preset.builtIn ? `${preset.name}のコピー` : preset.name);
+    setPromptDraftTemplate(preset.template);
+    setTab("settings");
+  }
+
+  function insertPromptVariable(key: string) {
+    setPromptDraftTemplate((current) => `${current}${current.endsWith("\n") || !current ? "" : "\n"}{{${key}}}`);
+  }
+
+  async function savePromptPreset() {
+    const missing = promptMissingVariables(promptDraftStep);
+    if (missing.length) {
+      setStatus(`必須変数が不足しています: ${missing.map((key) => `{{${key}}}`).join(", ")}`);
+      return;
+    }
+    if (!promptDraftName.trim() || !promptDraftTemplate.trim()) {
+      setStatus("プリセット名とプロンプトを入力してください");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch("/api/prompt-presets", {
+        method: promptDraftId ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(promptDraftId
+          ? { id: promptDraftId, name: promptDraftName, template: promptDraftTemplate }
+          : { step: promptDraftStep, name: promptDraftName, template: promptDraftTemplate }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { presets: PromptPreset[]; preset?: PromptPreset };
+      setPromptPresets(data.presets || []);
+      if (data.preset?.id) choosePromptPreset(data.preset.step, data.preset.id);
+      setPromptDraftId(data.preset?.id || promptDraftId);
+      setStatus("プロンプトプリセットを保存しました");
+      addLog({ level: "success", title: "プロンプト保存", detail: `${promptStepLabels[promptDraftStep]} / ${promptDraftName}` });
+    } catch (error) {
+      setStatus("プロンプト保存エラー");
+      addLog({ level: "error", title: "プロンプト保存エラー", detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePromptPreset(preset: PromptPreset) {
+    if (preset.builtIn) {
+      setStatus("デフォルトプリセットは削除できません");
+      return;
+    }
+    const ok = window.confirm(`プリセット「${preset.name}」を削除しますか？`);
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/prompt-presets", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: preset.id }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { presets: PromptPreset[] };
+      setPromptPresets(data.presets || []);
+      if (selectedPromptPresetIds[preset.step] === preset.id) choosePromptPreset(preset.step, `default-${preset.step}`);
+      if (promptDraftId === preset.id) {
+        setPromptDraftId("");
+        setPromptDraftName("");
+        setPromptDraftTemplate("");
+      }
+      setStatus("プロンプトプリセットを削除しました");
+    } catch (error) {
+      setStatus("プロンプト削除エラー");
+      addLog({ level: "error", title: "プロンプト削除エラー", detail: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createBrand() {
@@ -783,7 +968,7 @@ export default function Home() {
     startProgress("バナー作成中", "デザイン案を準備しています", 1 + plannedSheets);
     addLog({ level: "info", title: "バナー作成開始", detail: `${productInput.brandName || ""} ${productInput.productName} / ${targetCount}パターン\n設定=${codexSettings.model} / ${codexSettings.effort} / ${codexSettings.serviceTier}\n${requestModeLabel}` });
     try {
-      const ideaResult = await postJson<{ variants: Variant[]; mode: Mode; debug?: ApiDebug }>("/api/ideas", { ...productInput, count: targetCount, divisions: chunkDivision, sheetRuns: plannedSheets, cancelKey }, activeAbortRef.current?.signal);
+      const ideaResult = await postJson<{ variants: Variant[]; mode: Mode; debug?: ApiDebug }>("/api/ideas", { ...productInput, count: targetCount, divisions: chunkDivision, sheetRuns: plannedSheets, cancelKey, promptTemplates: activePromptTemplates }, activeAbortRef.current?.signal);
       if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
       updateProgress({ current: 1, detail: `画像を生成しています… 0/${plannedSheets}シート` });
       addLog({ level: "success", title: `訴求案生成完了: ${ideaResult.mode}`, detail: `${formatDebug(ideaResult.debug)}\n案数=${ideaResult.variants.length}\n${ideaResult.variants.map((variant) => `${variant.index}. ${variant.appeal || ""} / ${variant.prompt}`).join("\n")}` });
@@ -807,6 +992,7 @@ export default function Home() {
           sheetRuns: currentSheetRuns,
           cancelKey,
           codexSettings,
+          promptTemplates: activePromptTemplates,
         }, activeAbortRef.current?.signal);
         if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
         const chunkSheets = sheetsResult.sheets.sort((a, b) => a.runIndex - b.runIndex).map((sheet) => ({
@@ -880,6 +1066,7 @@ export default function Home() {
         aspectRatio,
         cancelKey,
         codexSettings,
+        promptTemplates: activePromptTemplates,
       }, activeAbortRef.current?.signal);
     setFinalUrl(result.finalUrl);
       setSelected(result.variant);
@@ -1522,6 +1709,7 @@ export default function Home() {
         instruction: libEditInstruction,
         cancelKey,
         codexSettings,
+        promptTemplates: activePromptTemplates,
       }, activeAbortRef.current?.signal);
       setLibFinalUrl(result.finalUrl);
       setStatus("仕上げ完了！");
@@ -1558,6 +1746,7 @@ export default function Home() {
           <button className={tab === "products" ? "active" : ""} type="button" onClick={() => setTab("products")}>商品管理</button>
         </nav>
         <div className="sidebar-footer">
+          <button className={tab === "settings" ? "active sidebarSettingsButton" : "sidebarSettingsButton"} type="button" onClick={() => setTab("settings")}>設定</button>
           <button type="button" disabled={busy} onClick={checkCodex}>接続テスト</button>
           <div className="status">{busy ? `処理中: ${status}` : status}</div>
           <div className="notifyStatus">
@@ -2105,6 +2294,106 @@ export default function Home() {
               {hoverPreview.caption ? <p>{hoverPreview.caption}</p> : null}
             </div>
           )}
+        </>
+
+      ) : tab === "settings" ? (
+        <>
+          <div className="main-header">
+            <div>
+              <h1>設定</h1>
+              <p>生成ステップごとのプロンプトプリセットを管理します</p>
+            </div>
+          </div>
+          <section className="settingsLayout">
+            <div className="panel promptPresetList">
+              <div className="sectionHead"><h2>使用するプリセット</h2></div>
+              {(Object.keys(promptStepLabels) as PromptStep[]).map((step) => (
+                <div className="promptStepCard" key={step}>
+                  <div className="promptStepHead">
+                    <strong>{promptStepLabels[step]}</strong>
+                    <span>{promptPresetsFor(step).find((preset) => preset.id === selectedPromptPresetIds[step])?.name || "デフォルト"}</span>
+                  </div>
+                  <select value={selectedPromptPresetIds[step]} onChange={(event) => choosePromptPreset(step, event.target.value)}>
+                    {promptPresetsFor(step).map((preset) => <option value={preset.id} key={preset.id}>{preset.name}{preset.builtIn ? "（固定）" : ""}</option>)}
+                  </select>
+                  <div className="promptPresetButtons">
+                    {promptPresetsFor(step).map((preset) => (
+                      <div className={`promptPresetRow ${selectedPromptPresetIds[step] === preset.id ? "active" : ""}`} key={preset.id}>
+                        <button type="button" onClick={() => choosePromptPreset(step, preset.id)}>{preset.name}</button>
+                        {preset.builtIn ? <span>固定</span> : <button type="button" onClick={() => editPromptPreset(preset)}>編集</button>}
+                        <button type="button" onClick={() => editPromptPreset(preset, true)}>コピー</button>
+                        {!preset.builtIn && <button className="dangerText" type="button" onClick={() => deletePromptPreset(preset)}>削除</button>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="panel promptEditor form">
+              <div className="sectionHead">
+                <h2>{promptDraftId ? "プリセット編集" : "プリセット作成"}</h2>
+                <button type="button" onClick={() => {
+                  const base = promptPresetsFor(promptDraftStep)[0];
+                  if (base) editPromptPreset(base, true);
+                }}>デフォルトから作成</button>
+              </div>
+              <div className="controlGrid">
+                <label>ステップ
+                  <select value={promptDraftStep} onChange={(event) => {
+                    const step = event.target.value as PromptStep;
+                    setPromptDraftStep(step);
+                    const base = promptPresetsFor(step)[0];
+                    setPromptDraftId("");
+                    setPromptDraftName(base ? `${base.name}のコピー` : "");
+                    setPromptDraftTemplate(base?.template || "");
+                  }}>
+                    {(Object.keys(promptStepLabels) as PromptStep[]).map((step) => <option value={step} key={step}>{promptStepLabels[step]}</option>)}
+                  </select>
+                </label>
+                <label>プリセット名
+                  <input value={promptDraftName} onChange={(event) => setPromptDraftName(event.target.value)} placeholder="例: 攻めた美容バナー用" />
+                </label>
+              </div>
+
+              <div className="variablePanel">
+                <div>
+                  <strong>変数</strong>
+                  <p>クリックするとプロンプト末尾に挿入します。必須変数がないと保存できません。</p>
+                </div>
+                <div className="variableChips">
+                  {promptVariableHelp[promptDraftStep].map((item) => (
+                    <button type="button" key={item.key} title={item.description} onClick={() => insertPromptVariable(item.key)}>
+                      {`{{${item.key}}}`}{item.required ? <b>必須</b> : null}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label>プロンプトテンプレート
+                <textarea className="promptTextarea" value={promptDraftTemplate} onChange={(event) => setPromptDraftTemplate(event.target.value)} placeholder="デフォルトをコピーして編集してください" />
+              </label>
+
+              {promptMissingVariables(promptDraftStep).length ? (
+                <div className="promptValidation error">
+                  不足している必須変数: {promptMissingVariables(promptDraftStep).map((key) => `{{${key}}}`).join(", ")}
+                </div>
+              ) : (
+                <div className="promptValidation ok">必須変数は入っています</div>
+              )}
+
+              <div className="buttonRow">
+                <button type="button" onClick={() => {
+                  setPromptDraftId("");
+                  setPromptDraftName("");
+                  setPromptDraftTemplate("");
+                }}>クリア</button>
+                <button className="primary" type="button" disabled={busy || !!promptMissingVariables(promptDraftStep).length || !promptDraftName.trim() || !promptDraftTemplate.trim()} onClick={savePromptPreset}>
+                  保存
+                </button>
+              </div>
+            </div>
+          </section>
         </>
 
       ) : (

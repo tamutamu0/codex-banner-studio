@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { ProductInput, Variant } from "@/app/lib/files";
 import { parseCodexJson, runCodexTurn } from "@/app/lib/codex-app-server";
 import { appendRequestLog } from "@/app/lib/request-log";
+import { DEFAULT_PROMPT_PRESETS, renderPromptTemplate, type PromptTemplateMap } from "@/app/lib/prompt-presets";
 
 const angles = [
   "黒板チョークで書いた手書きテイスト。訴求は商品調査から自然に決める",
@@ -52,10 +53,25 @@ function ensureRequiredVariants(variants: Variant[], input: ProductInput) {
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const input = (await request.json()) as ProductInput & { count?: number; divisions?: number; sheetRuns?: number; cancelKey?: string };
+  const input = (await request.json()) as ProductInput & { count?: number; divisions?: number; sheetRuns?: number; cancelKey?: string; promptTemplates?: PromptTemplateMap };
   const count = Math.min(Math.max(Number(input.count || 8), 1), 120);
   const jobId = `ideas-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let fallbackReason = "";
+  const customPrompt = input.promptTemplates?.ideas
+    ? renderPromptTemplate(input.promptTemplates.ideas, {
+      count,
+      priceInfo: input.priceInfo || "none",
+      priceMode: input.priceMode || "none",
+      productInputJson: JSON.stringify(input, null, 2),
+    })
+    : "";
+  const defaultPromptTemplate = DEFAULT_PROMPT_PRESETS.find((preset) => preset.id === "default-ideas")?.template || "";
+  const defaultPrompt = renderPromptTemplate(defaultPromptTemplate, {
+    count,
+    priceInfo: input.priceInfo || "none",
+    priceMode: input.priceMode || "none",
+    productInputJson: JSON.stringify(input, null, 2),
+  });
 
   await appendRequestLog({
     jobId,
@@ -70,7 +86,7 @@ export async function POST(request: Request) {
       jobId,
       logLabel: "ideas",
       cancelKey: input.cancelKey,
-      prompt: `
+      prompt: customPrompt || defaultPrompt || `
 あなたはWEB広告バナーのラフ案を考えるプロの広告ディレクターです。
 Return JSON only. No markdown, no explanation.
 Schema:

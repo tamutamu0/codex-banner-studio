@@ -73,6 +73,13 @@ h2 { font-size: 15px; font-weight: 600; color: var(--ink) }
 .sidebar-nav button.active { background: var(--accent-bg); color: var(--accent); font-weight: 600 }
 
 .sidebar-footer { padding: 12px; border-top: 1px solid var(--line); margin-top: auto }
+.sidebarSettingsButton { margin-bottom: 8px }
+.sidebar-footer .sidebarSettingsButton.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 700;
+}
 .sidebar-footer .status {
   margin-top: 8px; padding: 10px 12px;
   border-radius: var(--r); background: var(--raised);
@@ -715,6 +722,107 @@ textarea { min-height: 72px; resize: vertical }
 }
 .imageRemove:hover { background: #fff1ef; color: var(--red) }
 
+/* ─── Settings ─── */
+.settingsLayout {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.promptPresetList, .promptEditor { display: grid; gap: 14px }
+.promptStepCard {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.promptStepHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+.promptStepHead strong { font-size: 13px; color: var(--ink) }
+.promptStepHead span { min-width: 0; color: var(--accent); font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.promptPresetButtons { display: grid; gap: 6px }
+.promptPresetRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 6px;
+  align-items: center;
+}
+.promptPresetRow.active > button:first-child {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.promptPresetRow button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.promptPresetRow > button:first-child {
+  justify-content: flex-start;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.promptPresetRow span {
+  display: inline-grid;
+  place-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--dim);
+  font-size: 11px;
+}
+.dangerText { color: var(--red) }
+.variablePanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.variablePanel strong { font-size: 13px }
+.variablePanel p { color: var(--sub); font-size: 12px }
+.variableChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.variableChips button {
+  min-height: 30px;
+  padding: 0 9px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.variableChips b {
+  margin-left: 6px;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 10px;
+}
+.promptTextarea {
+  min-height: 440px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.promptValidation {
+  padding: 10px 12px;
+  border-radius: var(--r);
+  font-size: 12px;
+  font-weight: 700;
+}
+.promptValidation.ok { background: #ecfdf3; color: var(--green) }
+.promptValidation.error { background: #fff1ef; color: var(--red) }
+
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
 ::-webkit-scrollbar-thumb { background: #ddd; border-radius: 99px }
@@ -867,4 +975,5 @@ textarea { min-height: 72px; resize: vertical }
   .gen-library-body { height: auto }
 }
 @media (max-width: 1000px) { .lib-layout, .lib-layout.no-refine { grid-template-columns: 1fr } .masterGrid { grid-template-columns: 1fr } .gen-library-body { grid-template-columns: 1fr } .folderResizeHandle { display: none } }
+@media (max-width: 1000px) { .settingsLayout { grid-template-columns: 1fr } }
 @media (max-width: 800px) { .app { grid-template-columns: 1fr } .sidebar { display: none } }

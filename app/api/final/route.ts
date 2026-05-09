@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { generatedDir, type ProductInput, type Variant } from "@/app/lib/files";
 import { generateImageWithCodex } from "@/app/lib/codex-image";
 import { appendRequestLog } from "@/app/lib/request-log";
+import { renderPromptTemplate, type PromptTemplateMap } from "@/app/lib/prompt-presets";
 
 type Body = {
   input: ProductInput;
@@ -16,18 +17,24 @@ type Body = {
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
     serviceTier?: "fast" | "auto" | "flex";
   };
+  promptTemplates?: PromptTemplateMap;
 };
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const { input, variant, editInstruction, instruction, aspectRatio = "1:1", cancelKey, codexSettings } = (await request.json()) as Body;
+  const { input, variant, editInstruction, instruction, aspectRatio = "1:1", cancelKey, codexSettings, promptTemplates } = (await request.json()) as Body;
   const userInstruction = editInstruction ?? instruction ?? "";
   const jobId = `final-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   const imagePath = variant.cropUrl?.startsWith("/generated/")
     ? path.join(generatedDir, variant.cropUrl.replace("/generated/", ""))
     : undefined;
-  const finalPrompt = `
+  const editBlock = userInstruction.trim()
+    ? `修正指示:\n${userInstruction.trim()}\n\n上記の修正指示だけを反映し、それ以外は変えない。書き加えない。構成を変更しない。`
+    : "追加の修正指示はなし。選択画像の内容をそのまま維持し、単体バナーとして綺麗に仕上げる。";
+  const priceTreatmentText = variant.priceTreatment === "with_price" ? "価格あり。既存の価格表示を維持する。" : "価格なし。価格文言を追加しない。";
+  const productImageDescriptions = input.productImages?.map((image, index) => `  画像${index + 1}: ${image.description}`).join("\n") || "  なし";
+  const defaultFinalPrompt = `
 添付した選択画像をもとに、広告バナー画像を再生成して。
 再生成する比率は ${aspectRatio}。
 
@@ -38,16 +45,27 @@ export async function POST(request: Request) {
 グリッドの枠線、分割シートの余白、番号、セル境界など、候補シート由来の不要な要素だけを取り除く。
 プロデザイナーが仕上げたような高品質な単体バナーに整える。
 
-${userInstruction.trim() ? `修正指示:\n${userInstruction.trim()}\n\n上記の修正指示だけを反映し、それ以外は変えない。書き加えない。構成を変更しない。` : "追加の修正指示はなし。選択画像の内容をそのまま維持し、単体バナーとして綺麗に仕上げる。"}
+${editBlock}
 
 商品情報:
 - ブランド: ${input.brandName || "不明"}
 - 商品名: ${input.productName}
 - 価格情報: ${input.priceInfo || "なし"}
-- 選択画像の価格表示: ${variant.priceTreatment === "with_price" ? "価格あり。既存の価格表示を維持する。" : "価格なし。価格文言を追加しない。"}
+- 選択画像の価格表示: ${priceTreatmentText}
 - 商品画像説明:
-${input.productImages?.map((image, index) => `  画像${index + 1}: ${image.description}`).join("\n") || "  なし"}
+${productImageDescriptions}
   `.trim();
+  const finalPrompt = promptTemplates?.final
+    ? renderPromptTemplate(promptTemplates.final, {
+      aspectRatio,
+      editBlock,
+      brandName: input.brandName || "不明",
+      productName: input.productName,
+      priceInfo: input.priceInfo || "なし",
+      priceTreatmentText,
+      productImageDescriptions,
+    })
+    : defaultFinalPrompt;
 
   const imagePaths = [
     imagePath,
