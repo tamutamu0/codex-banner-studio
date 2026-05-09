@@ -71,7 +71,7 @@ export async function POST(request: Request) {
       logLabel: "ideas",
       cancelKey: input.cancelKey,
       prompt: `
-あなたは社内マーケティングチーム向けに、WEB広告バナーのラフ案を考える担当です。
+あなたはWEB広告バナーのラフ案を考えるプロの広告ディレクターです。
 Return JSON only. No markdown, no explanation.
 Schema:
 {
