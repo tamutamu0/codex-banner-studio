@@ -60,12 +60,13 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 商品マスタ、商品画像、生成画像、ライブラリ保存画像、実行ログはローカルデータとして扱い、Git管理から外しています。
 
 - 商品マスタ: `public/data/products.json`
+- ブランドマスタ: `public/data/brands.json`
 - 商品マスタ画像: `public/master-images`
 - 生成画像: `public/generated`
 - ライブラリ保存画像: `public/saved-banners`
 - 実行ログ: `public/data/request-log.jsonl`, `public/data/startup-log.txt`
 
-初回クローン直後は商品マスタが空です。必要に応じてアプリ画面から商品を登録してください。
+初回クローン直後は商品マスタとブランドマスタが空です。必要に応じてアプリ画面から登録してください。
 
 ブランド選択肢は `.env.local` の `NEXT_PUBLIC_BRAND_OPTIONS` でカンマ区切り指定できます。
 

@@ -603,6 +603,38 @@ textarea { min-height: 72px; resize: vertical }
 .productCard span { align-self: end; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .productCard small { color: var(--sub); font-size: 11px }
 
+.brandManager {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.brandManagerTop { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, .8fr); gap: 10px; align-items: end }
+.brandAdd { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: end }
+.brandAdd button, .brandChip button { min-height: 34px; padding: 0 10px; font-size: 12px }
+.brandChips { display: flex; flex-wrap: wrap; gap: 6px }
+.brandChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.brandChip > button:first-child {
+  border-color: transparent;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+}
+.brandChip > button:last-child { color: #dc2626 }
+.brandChip.editing { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto; width: min(100%, 420px) }
+.brandChip input { min-width: 0; padding: 8px 10px; font-size: 13px }
+
 .dropZone {
   display: grid; place-items: center; gap: 6px;
   min-height: 100px; margin-top: 12px;

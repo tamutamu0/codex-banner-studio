@@ -57,11 +57,18 @@ export type ProductMaster = {
   createdAt: string;
 };
 
+export type BrandMaster = {
+  id: string;
+  name: string;
+  createdAt: string;
+};
+
 export const generatedDir = path.join(process.cwd(), "public", "generated");
 export const masterImagesDir = path.join(process.cwd(), "public", "master-images");
 export const dataDir = path.join(process.cwd(), "public", "data");
 const historyPath = path.join(generatedDir, "history.json");
 const productsPath = path.join(dataDir, "products.json");
+const brandsPath = path.join(dataDir, "brands.json");
 const legacyProductsPath = path.join(generatedDir, "products.json");
 
 export function makeId(prefix = "job") {
@@ -174,5 +181,56 @@ export async function saveProduct(product: ProductMaster) {
   const products = await readProducts();
   const next = [product, ...products.filter((item) => item.id !== product.id)];
   await writeFile(productsPath, JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
+export async function replaceProductBrand(oldName: string, newName: string) {
+  await ensureMasterDirs();
+  const products = await readProducts();
+  const next = products.map((product) => product.brandName === oldName ? { ...product, brandName: newName } : product);
+  await writeFile(productsPath, JSON.stringify(next, null, 2), "utf8");
+  return next;
+}
+
+function envBrandOptions() {
+  return (process.env.NEXT_PUBLIC_BRAND_OPTIONS || "Brand A,Brand B")
+    .split(",")
+    .map((brand) => brand.trim())
+    .filter(Boolean);
+}
+
+function normalizeBrands(brands: Array<Partial<BrandMaster> | string>) {
+  const seen = new Set<string>();
+  const normalized: BrandMaster[] = [];
+  for (const item of brands) {
+    const name = typeof item === "string" ? item.trim() : String(item.name || "").trim();
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    normalized.push({
+      id: typeof item === "string" || !item.id ? makeId("brand") : item.id,
+      name,
+      createdAt: typeof item === "string" || !item.createdAt ? new Date().toISOString() : item.createdAt,
+    });
+  }
+  return normalized;
+}
+
+export async function readBrands(): Promise<BrandMaster[]> {
+  await ensureMasterDirs();
+  try {
+    const raw = await readFile(brandsPath, "utf8");
+    const parsed = JSON.parse(raw) as Array<Partial<BrandMaster> | string>;
+    const brands = normalizeBrands(Array.isArray(parsed) ? parsed : []);
+    if (brands.length) return brands;
+  } catch {
+    // Fall back to env/default brands.
+  }
+  return normalizeBrands(envBrandOptions());
+}
+
+export async function saveBrands(brands: BrandMaster[]) {
+  await ensureMasterDirs();
+  const next = normalizeBrands(brands);
+  await writeFile(brandsPath, JSON.stringify(next, null, 2), "utf8");
   return next;
 }

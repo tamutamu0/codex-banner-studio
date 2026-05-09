@@ -13,6 +13,7 @@ type Product = {
   notes?: string;
   priceInfo?: string;
 };
+type Brand = { id: string; name: string; createdAt: string };
 
 type ProductInput = {
   productId?: string;
@@ -83,11 +84,11 @@ type HistoryRecord = {
   selectedIndex?: number;
 };
 
-const BRAND_OPTIONS = (process.env.NEXT_PUBLIC_BRAND_OPTIONS || "Brand A,Brand B")
+const INITIAL_BRAND_OPTIONS = (process.env.NEXT_PUBLIC_BRAND_OPTIONS || "Brand A,Brand B")
   .split(",")
   .map((brand) => brand.trim())
   .filter(Boolean);
-const DEFAULT_BRAND = BRAND_OPTIONS[0] || "";
+const DEFAULT_BRAND = INITIAL_BRAND_OPTIONS[0] || "";
 type ProgressState = {
   active: boolean;
   title: string;
@@ -205,9 +206,13 @@ function revokePreview(row: NewImageRow) {
 export default function Home() {
   const [tab, setTab] = useState<Tab>("generate");
   const [products, setProducts] = useState<Product[]>([]);
+  const [brands, setBrands] = useState<Brand[]>(INITIAL_BRAND_OPTIONS.map((name, index) => ({ id: `initial-${index}`, name, createdAt: "" })));
   const [selectedProductId, setSelectedProductId] = useState("");
   const [editingProductId, setEditingProductId] = useState<string | null>(null);
   const [newBrandName, setNewBrandName] = useState(DEFAULT_BRAND);
+  const [newBrandDraft, setNewBrandDraft] = useState("");
+  const [editingBrandId, setEditingBrandId] = useState("");
+  const [editingBrandName, setEditingBrandName] = useState("");
   const [newProductName, setNewProductName] = useState("");
   const [newProductNotes, setNewProductNotes] = useState("");
   const [newProductPriceInfo, setNewProductPriceInfo] = useState("");
@@ -287,7 +292,9 @@ export default function Home() {
     };
   }, [selectedProduct, direction, priceInfo, priceMode]);
 
-  useEffect(() => { void loadProducts(); void loadSaveTree(); void loadHistory(true); }, []);
+  const brandOptions = brands.map((brand) => brand.name);
+
+  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); }, []);
 
   useEffect(() => {
     void loadRateLimitInfo();
@@ -318,6 +325,91 @@ export default function Home() {
     if (data.products[0]) {
       setSelectedProductId(data.products[0].id);
       setPriceInfo(data.products[0].priceInfo || "");
+    }
+  }
+
+  async function loadBrands() {
+    const response = await fetch("/api/brands");
+    const data = (await response.json()) as { brands: Brand[] };
+    const next = data.brands?.length ? data.brands : INITIAL_BRAND_OPTIONS.map((name, index) => ({ id: `initial-${index}`, name, createdAt: "" }));
+    setBrands(next);
+    setNewBrandName((current) => current || next[0]?.name || "");
+  }
+
+  async function createBrand() {
+    const name = newBrandDraft.trim();
+    if (!name) {
+      setStatus("ブランド名を入力してください");
+      return;
+    }
+    try {
+      const response = await fetch("/api/brands", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { brands: Brand[] };
+      setBrands(data.brands);
+      setNewBrandName(name);
+      setNewBrandDraft("");
+      setStatus("ブランドを追加しました");
+    } catch (error) {
+      setStatus("ブランド追加エラー");
+      addLog({ level: "error", title: "ブランド追加エラー", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  async function updateBrand() {
+    const name = editingBrandName.trim();
+    if (!editingBrandId || !name) {
+      setStatus("編集するブランドを選んでください");
+      return;
+    }
+    const current = brands.find((brand) => brand.id === editingBrandId);
+    try {
+      const response = await fetch("/api/brands", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: editingBrandId, name }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { brands: Brand[]; affectedProducts: number };
+      setBrands(data.brands);
+      if (newBrandName === current?.name) setNewBrandName(name);
+      if (current?.name) {
+        setProducts((items) => items.map((product) => product.brandName === current.name ? { ...product, brandName: name } : product));
+      }
+      setEditingBrandId("");
+      setEditingBrandName("");
+      setStatus(data.affectedProducts ? `ブランド名を更新しました。既存商品${data.affectedProducts}件にも反映しました` : "ブランド名を更新しました");
+    } catch (error) {
+      setStatus("ブランド更新エラー");
+      addLog({ level: "error", title: "ブランド更新エラー", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  async function deleteBrand(brand: Brand) {
+    const ok = window.confirm(`ブランド「${brand.name}」を削除しますか？`);
+    if (!ok) return;
+    try {
+      const response = await fetch("/api/brands", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: brand.id }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data = (await response.json()) as { brands: Brand[] };
+      setBrands(data.brands);
+      if (newBrandName === brand.name) setNewBrandName(data.brands[0]?.name || "");
+      if (editingBrandId === brand.id) {
+        setEditingBrandId("");
+        setEditingBrandName("");
+      }
+      setStatus("ブランドを削除しました");
+    } catch (error) {
+      setStatus("ブランド削除エラー");
+      addLog({ level: "error", title: "ブランド削除エラー", detail: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -500,7 +592,7 @@ export default function Home() {
 
   function resetProductForm() {
     setEditingProductId(null);
-    setNewBrandName(DEFAULT_BRAND);
+    setNewBrandName(brandOptions[0] || DEFAULT_BRAND);
     setNewProductName("");
     setNewProductNotes("");
     setNewProductPriceInfo("");
@@ -524,7 +616,7 @@ export default function Home() {
     setTab("products");
     setEditingProductId(product.id);
     setSelectedProductId(product.id);
-    setNewBrandName(product.brandName || DEFAULT_BRAND);
+    setNewBrandName(product.brandName || brandOptions[0] || DEFAULT_BRAND);
     setNewProductName(product.name);
     setNewProductNotes(product.notes || "");
     setNewProductPriceInfo(product.priceInfo || "");
@@ -2052,7 +2144,36 @@ export default function Home() {
                   </div>
                 )}
               </div>
-              <label>ブランド<select value={newBrandName} onChange={(event) => setNewBrandName(event.target.value)}>{BRAND_OPTIONS.map((brand) => <option value={brand} key={brand}>{brand}</option>)}</select></label>
+              <div className="brandManager">
+                <div className="brandManagerTop">
+                  <label>ブランド<select value={newBrandName} onChange={(event) => setNewBrandName(event.target.value)}>
+                    {brandOptions.map((brand) => <option value={brand} key={brand}>{brand}</option>)}
+                  </select></label>
+                  <div className="brandAdd">
+                    <input value={newBrandDraft} onChange={(event) => setNewBrandDraft(event.target.value)} placeholder="ブランド追加" />
+                    <button type="button" onClick={createBrand}>追加</button>
+                  </div>
+                </div>
+                <div className="brandChips">
+                  {brands.map((brand) => (
+                    <span className={`brandChip ${editingBrandId === brand.id ? "editing" : ""}`} key={brand.id}>
+                      {editingBrandId === brand.id ? (
+                        <>
+                          <input value={editingBrandName} onChange={(event) => setEditingBrandName(event.target.value)} />
+                          <button type="button" onClick={updateBrand}>保存</button>
+                          <button type="button" onClick={() => { setEditingBrandId(""); setEditingBrandName(""); }}>取消</button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => setNewBrandName(brand.name)}>{brand.name}</button>
+                          <button type="button" title="ブランド名を編集" aria-label={`${brand.name}を編集`} onClick={() => { setEditingBrandId(brand.id); setEditingBrandName(brand.name); }}>編集</button>
+                          <button type="button" title="ブランドを削除" aria-label={`${brand.name}を削除`} onClick={() => deleteBrand(brand)}>×</button>
+                        </>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
               <label>商品名<input value={newProductName} onChange={(event) => setNewProductName(event.target.value)} placeholder="例: スカルプケアシャンプー" /></label>
               <label>価格情報<input value={newProductPriceInfo} onChange={(event) => setNewProductPriceInfo(event.target.value)} placeholder="例: 初回価格1,000円(税込)" /></label>
               <label>メモ<textarea value={newProductNotes} onChange={(event) => setNewProductNotes(event.target.value)} placeholder="ターゲットやトーンなど、バナーに反映したい情報" /></label>
