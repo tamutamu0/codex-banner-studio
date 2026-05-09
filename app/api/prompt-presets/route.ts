@@ -31,7 +31,7 @@ export async function POST(request: Request) {
     createdAt: now,
     updatedAt: now,
   };
-  const next = await saveCustomPromptPresets([nextPreset, ...presets.filter((preset) => !preset.builtIn)]);
+  const next = await saveCustomPromptPresets([nextPreset, ...presets]);
   return NextResponse.json({ preset: nextPreset, presets: next });
 }
 
@@ -41,7 +41,6 @@ export async function PATCH(request: Request) {
   const presets = await readPromptPresets();
   const current = presets.find((preset) => preset.id === id);
   if (!current) return NextResponse.json({ message: "プリセットが見つかりません" }, { status: 404 });
-  if (current.builtIn) return NextResponse.json({ message: "デフォルトプリセットは変更できません。コピーして編集してください" }, { status: 400 });
 
   const name = String(body.name || "").trim();
   const template = String(body.template || "").trim();
@@ -50,13 +49,13 @@ export async function PATCH(request: Request) {
   const missing = missingRequiredVariables(current.step, template);
   if (missing.length) return NextResponse.json({ message: `必須変数が不足しています: ${missing.map((key) => `{{${key}}}`).join(", ")}` }, { status: 400 });
 
-  const custom = presets.filter((preset) => !preset.builtIn).map((preset) => preset.id === id ? {
+  const updated = presets.map((preset) => preset.id === id ? {
     ...preset,
     name,
     template,
     updatedAt: new Date().toISOString(),
   } : preset);
-  const next = await saveCustomPromptPresets(custom);
+  const next = await saveCustomPromptPresets(updated);
   return NextResponse.json({ presets: next, preset: next.find((preset) => preset.id === id) });
 }
 

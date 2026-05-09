@@ -21,21 +21,22 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const body = (await request.json()) as { id?: string; name?: string };
+  const body = (await request.json()) as { id?: string; name?: string; oldName?: string };
   const id = String(body.id || "").trim();
   const name = String(body.name || "").trim();
   if (!id || !name) return NextResponse.json({ message: "ブランド名を入力してください" }, { status: 400 });
 
   const brands = await readBrands();
-  const current = brands.find((brand) => brand.id === id);
+  const oldName = String(body.oldName || "").trim();
+  const current = brands.find((brand) => brand.id === id) || brands.find((brand) => oldName && brand.name === oldName);
   if (!current) return NextResponse.json({ message: "ブランドが見つかりません" }, { status: 404 });
-  if (brands.some((brand) => brand.id !== id && brand.name.toLowerCase() === name.toLowerCase())) {
+  if (brands.some((brand) => brand.id !== current.id && brand.name.toLowerCase() === name.toLowerCase())) {
     return NextResponse.json({ message: "同じブランド名がすでにあります" }, { status: 409 });
   }
 
   const products = await readProducts();
   const affectedProducts = products.filter((product) => product.brandName === current.name).length;
-  const nextBrands: BrandMaster[] = brands.map((brand) => brand.id === id ? { ...brand, name } : brand);
+  const nextBrands: BrandMaster[] = brands.map((brand) => brand.id === current.id ? { ...brand, name } : brand);
   const next = await saveBrands(nextBrands);
   if (affectedProducts) await replaceProductBrand(current.name, name);
 

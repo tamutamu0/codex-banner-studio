@@ -15,6 +15,15 @@ export type ProjectRecord = {
   id: string;
   createdAt: string;
   input: ProductInput;
+  generationSettings?: {
+    productId?: string;
+    direction?: string;
+    priceInfo?: string;
+    priceMode?: "all" | "mixed" | "none";
+    divisions?: number;
+    sheetRuns?: number;
+    imagesPerRequest?: number;
+  };
   ideas: Variant[];
   sheetUrl?: string;
   sheetUrls?: string[];
@@ -199,6 +208,11 @@ function envBrandOptions() {
     .filter(Boolean);
 }
 
+function stableBrandId(name: string) {
+  const normalized = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  return `brand-${normalized || Buffer.from(name).toString("hex").slice(0, 12)}`;
+}
+
 function normalizeBrands(brands: Array<Partial<BrandMaster> | string>) {
   const seen = new Set<string>();
   const normalized: BrandMaster[] = [];
@@ -207,7 +221,7 @@ function normalizeBrands(brands: Array<Partial<BrandMaster> | string>) {
     if (!name || seen.has(name.toLowerCase())) continue;
     seen.add(name.toLowerCase());
     normalized.push({
-      id: typeof item === "string" || !item.id ? makeId("brand") : item.id,
+      id: typeof item === "string" || !item.id ? stableBrandId(name) : item.id,
       name,
       createdAt: typeof item === "string" || !item.createdAt ? new Date().toISOString() : item.createdAt,
     });

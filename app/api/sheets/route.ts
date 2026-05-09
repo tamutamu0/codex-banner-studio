@@ -4,7 +4,7 @@ import { cropSheet } from "@/app/lib/crop";
 import { makeId, type ProductInput, type Variant } from "@/app/lib/files";
 import { generateImagesWithCodex } from "@/app/lib/codex-image";
 import { appendRequestLog } from "@/app/lib/request-log";
-import { renderPromptTemplate, type PromptTemplateMap } from "@/app/lib/prompt-presets";
+import { renderPromptWithGuardrails, type PromptTemplateMap } from "@/app/lib/prompt-presets";
 
 type Body = {
   input: ProductInput;
@@ -15,7 +15,7 @@ type Body = {
   codexSettings?: {
     model?: string;
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
-    serviceTier?: "fast" | "auto" | "flex";
+    serviceTier?: "fast" | "auto";
   };
   promptTemplates?: PromptTemplateMap;
 };
@@ -44,7 +44,8 @@ export async function POST(request: Request) {
   const defaultPrompt = `
 あなたはプロのWEB広告のディレクター・デザイナーです。
 ${input.brandName ? `${input.brandName} ` : ""}${input.productName}を検索し、調べた内容と添付した商品画像を参考にして、ハイクオリティのWEB広告バナーを、合計${runCount}枚のPNG画像として生成してください。
-各PNG画像は「${count}パターンを上下左右に並べた1枚の分割シート」です。
+各PNG画像そのものの比率は必ず1:1の正方形です。
+各PNG画像は「1:1のバナーを${count}パターン、上下左右に並べた1枚の正方形分割シート」です。
 各セルは完全に均等なグリッドにし、セル境界と外枠には細い黒線を入れてください。
 合計で ${count}分割 × ${runCount}枚 = ${count * runCount} 候補を作成してください。
 それぞれデザイン・構図・訴求を大きく変えて差別化すること。
@@ -57,6 +58,7 @@ AIっぽさを無くして、人間の凄腕広告クリエイターが作った
 
 重要:
 - PNG画像を必ず${runCount}枚、別々の画像として生成する。
+- 各PNG画像は必ず1:1の正方形。横長・縦長にしない。
 - 1枚に${count * runCount}候補を全部詰め込まない。必ず「${count}分割シート」を${runCount}枚作る。
 - 各シートは下のシート別リストだけに対応する。
 - 最終出力は画像だけ。説明文だけで終わらない。
@@ -108,18 +110,17 @@ ${input.priceInfo || "なし"}
 - 価格表示なしの案には価格文言を入れない。
 - 価格表示ありの案では、商品名と価格以外の余計な広告コピーを増やしすぎない。
   `.trim();
-  const prompt = promptTemplates?.sheets
-    ? renderPromptTemplate(promptTemplates.sheets, {
-      brandProductName: `${input.brandName ? `${input.brandName} ` : ""}${input.productName}`,
-      count,
-      runCount,
-      totalCandidates: count * runCount,
-      sheetBlocks,
-      productImageDescriptions,
-      productNotes,
-      priceInfo: input.priceInfo || "なし",
-    })
-    : defaultPrompt;
+  const promptValues = {
+    brandProductName: `${input.brandName ? `${input.brandName} ` : ""}${input.productName}`,
+    count,
+    runCount,
+    totalCandidates: count * runCount,
+    sheetBlocks,
+    productImageDescriptions,
+    productNotes,
+    priceInfo: input.priceInfo || "なし",
+  };
+  const prompt = renderPromptWithGuardrails("sheets", promptTemplates?.sheets || defaultPrompt, promptValues);
 
   await appendRequestLog({
     jobId,
