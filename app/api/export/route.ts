@@ -4,13 +4,16 @@ import { NextResponse } from "next/server";
 import { generatedDir, makeId, type ProductInput, type Variant } from "@/app/lib/files";
 
 type Body = {
-  action?: "createFolder" | "saveImage" | "moveFile" | "moveFolder" | "deleteFolder" | "deleteFile" | "reorderFolder" | "updateMeta";
+  action?: "createFolder" | "saveImage" | "moveFile" | "moveFolder" | "deleteFolder" | "deleteFile" | "reorderFolder" | "updateMeta" | "setDisplayVersion";
   sourceUrl?: string;
+  sourceLibraryUrl?: string;
   fileUrl?: string;
   input?: ProductInput;
   variant?: Variant | null;
   stage?: "candidate" | "final";
   aspectRatio?: string;
+  editInstruction?: string;
+  generationPrompt?: string;
   folder?: string;
   name?: string;
   targetFolder?: string;
@@ -25,7 +28,36 @@ type SavedNode = {
   name: string;
   path: string;
   children: SavedNode[];
-  files: Array<{ name: string; displayName?: string; rating?: number; appeal?: string; stylePrompt?: string; url: string; path: string; propertyUrl?: string; propertyPath?: string }>;
+  files: SavedFile[];
+};
+
+type SavedFile = {
+  name: string;
+  displayName?: string;
+  rating?: number;
+  appeal?: string;
+  stylePrompt?: string;
+  url: string;
+  path: string;
+  propertyUrl?: string;
+  propertyPath?: string;
+  assetId?: string;
+  rootId?: string;
+  parentUrl?: string;
+  sourceUrl?: string;
+  aspectRatio?: string;
+  editInstruction?: string;
+  generationPrompt?: string;
+  product?: {
+    brandName?: string;
+    productName?: string;
+    priceInfo?: string;
+    priceMode?: string;
+  };
+  savedAt?: string;
+  isDisplay?: boolean;
+  versionCount?: number;
+  versions?: SavedFile[];
 };
 
 const savedRoot = path.join(process.cwd(), "public", "saved-banners");
@@ -126,10 +158,11 @@ function sidecarUrlForImage(imageUrl: string) {
   return imageUrl.replace(/\.(png|jpe?g|webp)$/i, ".json");
 }
 
-function publicSafeMetadata(body: Body, fileName: string, folder: string) {
+function publicSafeMetadata(body: Body, fileName: string, folder: string, assetId: string, lineage: Record<string, any>) {
   const variant = body.variant || undefined;
   return {
     schemaVersion: 1,
+    assetId,
     savedAt: new Date().toISOString(),
     fileName,
     displayName: fileName.replace(/\.(png|jpe?g|webp)$/i, ""),
@@ -151,6 +184,7 @@ function publicSafeMetadata(body: Body, fileName: string, folder: string) {
       stylePrompt: variant?.prompt || "",
       priceTreatment: variant?.priceTreatment || "unknown",
     },
+    lineage,
     note: "This sidecar stores public-safe creative metadata for library organization. It intentionally excludes local file paths and full internal request prompts.",
   };
 }
@@ -191,13 +225,96 @@ async function findDuplicateInFolder(targetDir: string, sourceUrl: string) {
   return null;
 }
 
+function savedFileFromMeta(entryName: string, imagePath: string, imageUrl: string, meta: Record<string, any>): SavedFile {
+  const assetId = typeof meta.assetId === "string" && meta.assetId ? meta.assetId : entryName.replace(/\.(png|jpe?g|webp)$/i, "");
+  const rootId = typeof meta.lineage?.rootId === "string" && meta.lineage.rootId ? meta.lineage.rootId : assetId;
+  return {
+    name: entryName,
+    displayName: typeof meta.displayName === "string" ? meta.displayName : undefined,
+    rating: Number.isFinite(Number(meta.rating)) ? Number(meta.rating) : 0,
+    appeal: typeof meta.creative?.appeal === "string" ? meta.creative.appeal : "",
+    stylePrompt: typeof meta.creative?.stylePrompt === "string" ? meta.creative.stylePrompt : "",
+    url: imageUrl,
+    path: imagePath,
+    propertyUrl: sidecarUrlForImage(imageUrl),
+    propertyPath: sidecarPathForImage(imagePath),
+    assetId,
+    rootId,
+    parentUrl: typeof meta.lineage?.parentUrl === "string" ? meta.lineage.parentUrl : "",
+    sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : "",
+    aspectRatio: typeof meta.aspectRatio === "string" ? meta.aspectRatio : typeof meta.lineage?.aspectRatio === "string" ? meta.lineage.aspectRatio : "",
+    editInstruction: typeof meta.lineage?.editInstruction === "string" ? meta.lineage.editInstruction : "",
+    generationPrompt: typeof meta.lineage?.generationPrompt === "string" ? meta.lineage.generationPrompt : "",
+    product: meta.product && typeof meta.product === "object" ? {
+      brandName: typeof meta.product.brandName === "string" ? meta.product.brandName : "",
+      productName: typeof meta.product.productName === "string" ? meta.product.productName : "",
+      priceInfo: typeof meta.product.priceInfo === "string" ? meta.product.priceInfo : "",
+      priceMode: typeof meta.product.priceMode === "string" ? meta.product.priceMode : "",
+    } : undefined,
+    savedAt: typeof meta.savedAt === "string" ? meta.savedAt : typeof meta.updatedAt === "string" ? meta.updatedAt : "",
+    isDisplay: Boolean(meta.lineage?.display),
+  };
+}
+
+function sortVersions(files: SavedFile[]) {
+  return [...files].sort((a, b) => {
+    const aTime = a.savedAt || a.name;
+    const bTime = b.savedAt || b.name;
+    return bTime.localeCompare(aTime, "ja");
+  });
+}
+
+async function collectSavedImagePaths(dir = savedRoot): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const target = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...await collectSavedImagePaths(target));
+    else if (entry.isFile() && /\.(png|jpe?g|webp)$/i.test(entry.name)) files.push(target);
+  }
+  return files;
+}
+
+async function buildLineage(body: Body, assetId: string) {
+  const now = new Date().toISOString();
+  if (!body.sourceLibraryUrl) {
+    return {
+      rootId: assetId,
+      parentAssetId: "",
+      parentUrl: "",
+      generatedFromUrl: body.sourceUrl || "",
+      aspectRatio: body.aspectRatio || "candidate",
+      editInstruction: body.editInstruction || "",
+      generationPrompt: body.generationPrompt || body.variant?.prompt || "",
+      display: true,
+      createdAt: now,
+    };
+  }
+
+  const parent = resolveSavedFileFromUrl(body.sourceLibraryUrl);
+  const parentMeta = await readSidecar(parent.target);
+  const parentAssetId = typeof parentMeta.assetId === "string" && parentMeta.assetId ? parentMeta.assetId : parent.name.replace(/\.(png|jpe?g|webp)$/i, "");
+  const rootId = typeof parentMeta.lineage?.rootId === "string" && parentMeta.lineage.rootId ? parentMeta.lineage.rootId : parentAssetId;
+  return {
+    rootId,
+    parentAssetId,
+    parentUrl: body.sourceLibraryUrl,
+    generatedFromUrl: body.sourceUrl || "",
+    aspectRatio: body.aspectRatio || "final",
+    editInstruction: body.editInstruction || "",
+    generationPrompt: body.generationPrompt || body.variant?.prompt || "",
+    display: true,
+    createdAt: now,
+  };
+}
+
 async function readSavedNode(relativePath = ""): Promise<SavedNode> {
   const { normalized, target } = resolveSavedFolder(relativePath);
   await mkdir(target, { recursive: true });
   const entries = await readdir(target, { withFileTypes: true });
   const folderOrder = await readFolderOrder(normalized);
   const children: SavedNode[] = [];
-  const files: SavedNode["files"] = [];
+  const fileVersions: SavedFile[] = [];
 
   for (const entry of entries) {
     const childRelative = normalized ? `${normalized}/${entry.name}` : entry.name;
@@ -207,19 +324,24 @@ async function readSavedNode(relativePath = ""): Promise<SavedNode> {
     } else if (entry.isFile() && /\.(png|jpe?g|webp)$/i.test(entry.name)) {
       const imageUrl = `/saved-banners/${childRelative}`;
       const meta = await readSidecar(childPath);
-      files.push({
-        name: entry.name,
-        displayName: typeof meta.displayName === "string" ? meta.displayName : undefined,
-        rating: Number.isFinite(Number(meta.rating)) ? Number(meta.rating) : 0,
-        appeal: typeof meta.creative?.appeal === "string" ? meta.creative.appeal : "",
-        stylePrompt: typeof meta.creative?.stylePrompt === "string" ? meta.creative.stylePrompt : "",
-        url: imageUrl,
-        path: childPath,
-        propertyUrl: sidecarUrlForImage(imageUrl),
-        propertyPath: sidecarPathForImage(childPath),
-      });
+      fileVersions.push(savedFileFromMeta(entry.name, childPath, imageUrl, meta));
     }
   }
+
+  const groups = new Map<string, SavedFile[]>();
+  for (const file of fileVersions) {
+    const key = file.rootId || file.assetId || file.name;
+    groups.set(key, [...(groups.get(key) || []), file]);
+  }
+  const files = Array.from(groups.values()).map((group) => {
+    const versions = sortVersions(group);
+    const display = sortVersions(versions.filter((file) => file.isDisplay))[0] || versions[0];
+    return {
+      ...display,
+      versionCount: versions.length,
+      versions,
+    };
+  });
 
   return {
     name: normalized ? path.basename(normalized) : "saved-banners",
@@ -412,6 +534,34 @@ export async function POST(request: Request) {
     }
   }
 
+  if (body.action === "setDisplayVersion") {
+    try {
+      const file = resolveSavedFileFromUrl(String(body.fileUrl || body.sourceUrl || ""));
+      const targetMeta = await readSidecar(file.target);
+      const targetAssetId = typeof targetMeta.assetId === "string" && targetMeta.assetId ? targetMeta.assetId : file.name.replace(/\.(png|jpe?g|webp)$/i, "");
+      const rootId = typeof targetMeta.lineage?.rootId === "string" && targetMeta.lineage.rootId ? targetMeta.lineage.rootId : targetAssetId;
+      const imagePaths = await collectSavedImagePaths();
+      for (const imagePath of imagePaths) {
+        const meta = await readSidecar(imagePath);
+        const assetId = typeof meta.assetId === "string" && meta.assetId ? meta.assetId : path.basename(imagePath).replace(/\.(png|jpe?g|webp)$/i, "");
+        const currentRootId = typeof meta.lineage?.rootId === "string" && meta.lineage.rootId ? meta.lineage.rootId : assetId;
+        if (currentRootId !== rootId) continue;
+        await writeSidecar(imagePath, {
+          lineage: {
+            ...(meta.lineage || {}),
+            rootId,
+            display: imagePath === file.target,
+          },
+        });
+      }
+      const tree = await readSavedNode();
+      return NextResponse.json({ updated: true, fileUrl: body.fileUrl || body.sourceUrl, tree, rootPath: savedRoot });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return NextResponse.json({ message }, { status: 400 });
+    }
+  }
+
   const sourceUrl = String(body.sourceUrl || "");
   if (!sourceUrl.startsWith("/generated/")) {
     return NextResponse.json({ message: "保存できる生成画像が見つかりません" }, { status: 400 });
@@ -451,7 +601,9 @@ export async function POST(request: Request) {
   const targetPath = path.join(targetDir, fileName);
   await copyFile(sourcePath, targetPath);
   const propertyPath = sidecarPathForImage(targetPath);
-  await writeFile(propertyPath, JSON.stringify(publicSafeMetadata(body, fileName, targetFolder), null, 2), "utf8");
+  const assetId = makeId("asset");
+  const lineage = await buildLineage(body, assetId);
+  await writeFile(propertyPath, JSON.stringify(publicSafeMetadata(body, fileName, targetFolder, assetId, lineage), null, 2), "utf8");
   const tree = await readSavedNode();
   const url = `/saved-banners/${targetFolder ? `${targetFolder}/` : ""}${fileName}`;
 
