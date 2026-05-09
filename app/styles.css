@@ -124,11 +124,30 @@ h2 { font-size: 15px; font-weight: 600; color: var(--ink) }
 
 /* ─── Main area ─── */
 .main { padding: 32px 36px 60px; overflow-y: auto; min-width: 0 }
+.main.generateMain {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  padding-bottom: 28px;
+}
 .main-header { margin-bottom: 28px }
 .main-header p { color: var(--sub); font-size: 14px; margin-top: 4px }
 
 /* ─── Progress ─── */
-.progressPanel { margin-bottom: 20px; padding: 14px 18px; border: 1px solid #bdd0f0; border-radius: var(--r); background: #f4f8ff }
+.progressPanel {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 240;
+  width: min(420px, calc(100vw - 280px));
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #bdd0f0;
+  border-radius: var(--r);
+  background: #f4f8ff;
+  box-shadow: 0 14px 34px rgba(15,23,42,.14);
+}
 .progressPanel.running { border-color: var(--accent) }
 .progressMeta { display: grid; grid-template-columns: 20px 1fr auto; gap: 10px; align-items: center }
 .progressMeta strong { color: var(--accent); font-size: 14px }
@@ -156,8 +175,28 @@ h2 { font-size: 15px; font-weight: 600; color: var(--ink) }
 
 /* ─── Generate: 2-col ─── */
 .gen-layout { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 24px; align-items: start }
-.gen-settings { position: sticky; top: 32px }
+.gen-settings {
+  position: sticky;
+  top: 32px;
+  max-height: calc(100vh - 104px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.generateMain .gen-layout {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+  align-items: stretch;
+}
+.generateMain .gen-settings {
+  position: static;
+  max-height: none;
+  height: 100%;
+}
 .main:has(.gen-layout) { padding-bottom: 32px }
+.main.generateMain:has(.gen-layout) { padding-bottom: 28px }
 
 /* ─── Panel / Form ─── */
 .panel { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); padding: 20px }
@@ -193,6 +232,16 @@ textarea { min-height: 72px; resize: vertical }
 .mt { margin-top: 14px }
 .buttonRow { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px }
 .buttonRow.tight button { flex: 1; min-width: 0; font-size: 13px }
+.createBannerButton {
+  border-color: var(--green) !important;
+  background: #ecfdf3 !important;
+  color: var(--green) !important;
+  font-weight: 800;
+}
+.createBannerButton:hover:not(:disabled) {
+  background: #dcfce7 !important;
+  color: #15803d !important;
+}
 
 /* ─── Product preview ─── */
 .productPreview {
@@ -280,10 +329,24 @@ textarea { min-height: 72px; resize: vertical }
 .bulkBox small { color: #8a5a12; font-size: 11px; line-height: 1.5 }
 
 /* ─── History (subtle bar above grid) ─── */
-.historyBar { display: flex; align-items: center; gap: 8px; margin-bottom: 16px }
-.historyBar label { flex: 1; margin: 0; font-size: 13px }
-.historyBar select { max-width: 280px }
+.historyBar { display: flex; align-items: center; gap: 8px; margin: -4px 0 12px }
+.historyBar label {
+  width: min(360px, 100%);
+  margin: 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+.historyBar select {
+  min-height: 34px;
+  max-width: none;
+  padding: 7px 10px;
+  background: var(--raised);
+  font-size: 13px;
+}
 .historyBar button { min-height: 36px; padding: 0 12px; font-size: 13px }
+.generateHistoryTop {
+  justify-content: flex-start;
+}
 
 /* ─── Candidate grid ─── */
 .cropGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px }
@@ -299,7 +362,7 @@ textarea { min-height: 72px; resize: vertical }
 .crop > img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: calc(var(--r) - 2px) }
 .floatingHoverPreview {
   position: fixed;
-  z-index: 90;
+  z-index: 260;
   width: min(380px, 48vw);
   padding: 8px;
   border: 1px solid var(--line);
@@ -355,9 +418,35 @@ textarea { min-height: 72px; resize: vertical }
 .badge { display: inline-flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 99px; background: var(--raised); border: 1px solid var(--line); color: var(--sub); font-size: 12px; font-weight: 600 }
 
 /* ─── Library ─── */
-.lib-layout { display: grid; grid-template-columns: var(--folder-width, 340px) 8px minmax(0, 1fr) 300px; gap: 14px; align-items: start }
+.lib-layout {
+  display: grid;
+  grid-template-columns: var(--folder-width, 340px) 8px minmax(0, 1fr) 300px;
+  gap: 14px;
+  align-items: stretch;
+  height: calc(100vh - 150px);
+  min-height: 520px;
+  overflow: hidden;
+}
+.lib-layout.detail-collapsed { grid-template-columns: var(--folder-width, 340px) 8px minmax(0, 1fr) 42px }
 .lib-layout.no-refine { grid-template-columns: var(--folder-width, 340px) 8px minmax(0, 1fr) }
-.folderPane { position: sticky; top: 32px }
+.folderPane {
+  align-self: start;
+  height: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.libraryResize {
+  align-self: stretch;
+  max-height: 100%;
+}
+.libraryContentPane {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .folderToolbar { display: grid; grid-template-columns: 1fr 56px; gap: 6px; margin-bottom: 10px }
 .folderToolbar input { min-height: 36px; padding: 8px 10px; font-size: 13px }
 .folderToolbar button { min-height: 36px; padding: 0; font-size: 13px }
@@ -368,12 +457,104 @@ textarea { min-height: 72px; resize: vertical }
 /* Children get a left border to show nesting */
 .folderNode > .folderNode { margin-left: 8px; padding-left: 8px; border-left: 2px solid var(--line) }
 .folderNode button { display: grid; grid-template-columns: 1fr 28px; align-items: center; min-height: 36px; padding: 6px 10px; text-align: left; font-size: 13px }
+.folderNode button[draggable="true"] { cursor: grab }
+.folderNode button[draggable="true"]:active { cursor: grabbing }
 .folderNode button.active { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); font-weight: 600 }
 .folderNode span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
 .folderNode span::before { content: "📁 "; font-size: 12px }
 .folderNode small { color: var(--dim); text-align: right; font-size: 11px }
-.folderNodeRow { display: flex; align-items: center; gap: 0 }
+.folderNodeRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: var(--r);
+}
 .folderNodeRow > button:first-child { flex: 1; min-width: 0 }
+.folderNodeRow.dragging {
+  opacity: .58;
+  transform: scale(.985);
+}
+.folderNodeRow.drop-inside > button:first-child {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.folderNodeRow.drop-inside > button:first-child::after {
+  content: "ここに入る";
+  justify-self: end;
+  grid-column: 2;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.folderNodeRow.drop-before::before,
+.folderNodeRow.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 32px;
+  z-index: 2;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--accent);
+}
+.folderNodeRow.drop-before::before { top: -3px }
+.folderNodeRow.drop-after::after { bottom: -3px }
+.folderNodeRow.drop-before > button:first-child,
+.folderNodeRow.drop-after > button:first-child {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: #fbfefd;
+}
+.folderNodeRow.justMoved > button:first-child {
+  border-color: var(--green);
+  background: #ecfdf3;
+}
+.folderNodeRow.file-drop-target > button:first-child {
+  border-color: var(--green);
+  background: #ecfdf3;
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green), 0 0 0 3px rgba(22, 163, 74, .10);
+}
+.folderNodeRow.file-drop-target > button:first-child::after {
+  content: "ここに入る";
+  justify-self: end;
+  grid-column: 2;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.dragGhost {
+  position: fixed;
+  left: -9999px;
+  top: -9999px;
+  z-index: -1;
+  display: grid;
+  place-items: end start;
+  width: 54px;
+  height: 54px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.75);
+  border-radius: 10px;
+  background-color: var(--raised);
+  background-position: center;
+  background-size: cover;
+  box-shadow: 0 8px 22px rgba(15,23,42,.16);
+  opacity: .42;
+}
+.dragGhost span {
+  margin: 4px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: rgba(15,23,42,.72);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+}
 .folderDelete {
   display: inline-flex !important; align-items: center; justify-content: center;
   flex: 0 0 24px;
@@ -424,9 +605,30 @@ textarea { min-height: 72px; resize: vertical }
   margin-bottom: 12px;
 }
 .libraryAxis {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+}
+.libraryAxisDivider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 8px;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.libraryAxisDivider::before,
+.libraryAxisDivider::after {
+  content: "";
+  height: 1px;
+  background: var(--line);
+}
+.libraryAxisDivider::before {
+  width: 12px;
+}
+.libraryAxisDivider::after {
+  flex: 1;
 }
 .libraryAxis button {
   width: 100%;
@@ -446,13 +648,70 @@ textarea { min-height: 72px; resize: vertical }
 }
 .libraryAxis span::before { content: "○ "; font-size: 12px }
 .libraryAxis small { color: var(--dim); text-align: right; font-size: 11px }
+.libraryAxis p {
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
 .libraryFilters input,
 .libraryFilters select {
   min-height: 36px;
   padding: 8px 10px;
   font-size: 13px;
 }
+.filterSearchBox {
+  position: relative;
+  min-width: 0;
+}
+.filterSearchBox input {
+  padding-right: 34px;
+}
+.filterSearchBox button {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+}
+.filterSearchBox button:hover {
+  background: var(--raised);
+  color: var(--ink);
+}
 .bannerGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px }
+.bannerGrid.selectionSurface {
+  align-content: start;
+  min-height: max(460px, calc(100vh - 360px));
+  margin: -10px;
+  padding: 10px;
+}
+.selectionSurface {
+  min-height: 220px;
+  user-select: none;
+}
+.selectionSurface.selecting {
+  cursor: crosshair;
+}
+.marqueeSelectionBox {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.45);
+}
 .bannerTile {
   position: relative;
   display: grid; gap: 8px; padding: 8px;
@@ -467,7 +726,7 @@ textarea { min-height: 72px; resize: vertical }
   width: 100%;
   aspect-ratio: 1;
 }
-.bannerImageWrap img { width: 100%; height: 100%; object-fit: cover; border: 1px solid var(--line); border-radius: 6px; background: var(--raised) }
+.bannerImageWrap img { width: 100%; height: 100%; object-fit: contain; border: 1px solid var(--line); border-radius: 6px; background: var(--raised) }
 .bannerTile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px }
 .bannerTile small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 11px }
 .bannerDelete {
@@ -522,9 +781,37 @@ textarea { min-height: 72px; resize: vertical }
 .crop:hover .tileDownload,
 .tileDownload:focus-visible { opacity: 1 }
 .tileDownload:hover { border-color: var(--accent); background: var(--accent-bg); color: var(--accent) }
+.versionBadge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid rgba(255,255,255,.75);
+  border-radius: 999px;
+  background: rgba(15,23,42,.72);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(15,23,42,.14);
+  font-size: 11px;
+  font-weight: 800;
+  opacity: .76;
+}
+.versionBadge:hover {
+  opacity: 1;
+  background: var(--accent);
+}
 .folderLabel {
-  padding: 0 2px;
+  display: block;
+  min-height: 18px;
+  margin: 1px 0 2px;
+  padding: 0 3px;
   color: var(--accent) !important;
+  line-height: 1.45;
   font-weight: 600;
 }
 .unsavedMeta { display: grid; gap: 3px; min-height: 52px }
@@ -540,6 +827,7 @@ textarea { min-height: 72px; resize: vertical }
 }
 .bannerNameInput {
   min-height: 30px;
+  margin-top: 1px;
   padding: 5px 7px;
   border-color: transparent;
   background: var(--raised);
@@ -563,6 +851,396 @@ textarea { min-height: 72px; resize: vertical }
 }
 .ratingRow button.active { color: #c28a12 }
 .ratingRow button:hover { color: var(--gold) }
+
+.libraryDetailPane {
+  height: 100%;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.libraryDetailPane.collapsed {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: var(--raised);
+}
+.libraryDetailPane.collapsed button {
+  display: grid;
+  grid-template-rows: 34px 1fr;
+  place-items: center;
+  writing-mode: vertical-rl;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.libraryDetailPane.collapsed button:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.collapseIcon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  writing-mode: horizontal-tb;
+  font-size: 18px;
+  line-height: 1;
+}
+.collapseLabel {
+  display: inline-block;
+}
+.detailHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.detailHeadActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+.paneCollapseButton {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--sub);
+  font-size: 20px;
+  line-height: 1;
+}
+.paneCollapseButton:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.detailHead h2 { margin: 0; font-size: 16px }
+.detailHead p { margin: 3px 0 0; color: var(--dim); font-size: 12px; line-height: 1.4 }
+.detailEmptyBox {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 220px;
+  padding: 20px;
+  border: 1px dashed var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+  color: var(--sub);
+  text-align: center;
+}
+.detailEmptyBox strong {
+  color: var(--ink);
+  font-size: 15px;
+}
+.detailEmptyBox span {
+  max-width: 220px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.libraryDetailPreview {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.detailList {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+.detailList div {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.detailList dt {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 800;
+}
+.detailList dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.detailList.compact { margin-top: 12px }
+.detailPrompt {
+  white-space: pre-wrap;
+}
+.detailStars {
+  color: #c28a12 !important;
+  letter-spacing: 1px;
+}
+.sourcePreviewLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--ink);
+  cursor: zoom-in;
+}
+.sourcePreviewLink img {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 6px;
+  background: var(--panel);
+}
+.sourcePreviewLink span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
+}
+.sourcePreviewLink:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.breakText {
+  word-break: break-all;
+}
+.detailDownload {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+.detailDownload:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.detailThumbGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.detailThumbGrid img,
+.detailThumbGrid span {
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raised);
+}
+.detailThumbGrid img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.detailThumbGrid span {
+  display: grid;
+  place-items: center;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 800;
+}
+.detailFileList {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+.detailFileList div {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+}
+.detailFileList strong,
+.detailFileList span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.detailFileList strong { font-size: 12px }
+.detailFileList span { color: var(--dim); font-size: 11px }
+.versionModal {
+  display: grid;
+  gap: 18px;
+  width: min(1160px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  box-shadow: 0 16px 48px rgba(0,0,0,.2);
+}
+.versionList {
+  display: grid;
+  gap: 14px;
+}
+.versionItem {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.versionItem.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.versionItem img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.versionMeta {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.versionTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.versionTitle strong { font-size: 16px }
+.versionTitle span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+.versionNameInput {
+  min-height: 38px;
+  padding: 8px 10px;
+  border-color: transparent;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+.versionNameInput:focus {
+  border-color: var(--accent);
+  background: #fff;
+}
+.versionMeta dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.versionMeta dl div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.versionMeta dt {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 800;
+}
+.versionMeta dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 13px;
+}
+.versionPrompt {
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--sub);
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.versionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.versionActions button,
+.versionActions a {
+  display: inline-grid;
+  place-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+.versionActions button:hover:not(:disabled),
+.versionActions a:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.savedNotice {
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #ecfdf3;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+}
 
 .saveDrop {
   display: grid; place-items: center; gap: 6px;
@@ -594,6 +1272,210 @@ textarea { min-height: 72px; resize: vertical }
 /* Refine panel */
 .refine-panel { position: sticky; top: 32px }
 .refine-panel .refine-preview { width: 100%; aspect-ratio: 1; object-fit: contain; border: 1px solid var(--line); border-radius: var(--r); background: var(--raised); margin-bottom: 14px }
+.libraryRefineModal {
+  display: grid;
+  gap: 16px;
+  width: min(980px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  box-shadow: 0 16px 48px rgba(0,0,0,.2);
+}
+.libraryRefineBody {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(260px, 340px);
+  gap: 18px;
+  align-items: start;
+}
+.refineAnnotator {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.refineCanvas {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.libraryRefineBody .refine-preview {
+  display: block;
+  width: 100%;
+  max-height: min(68vh, 680px);
+  object-fit: contain;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.refineAnnotationLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: none;
+}
+.refineAnnotationLayer.tool-pin { cursor: crosshair }
+.refineAnnotationLayer.tool-box { cursor: cell }
+.refineMark {
+  position: absolute;
+  pointer-events: none;
+}
+.refinePin {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(15,23,42,.28);
+  transform: translate(-50%, -50%);
+}
+.refineBox {
+  min-width: 18px;
+  min-height: 18px;
+  border: 2px solid #ef4444;
+  background: rgba(239,68,68,.13);
+  box-shadow: 0 0 0 1px rgba(255,255,255,.9) inset;
+}
+.refineBox b {
+  position: absolute;
+  left: -14px;
+  top: -14px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 13px;
+}
+.refineMark.active,
+.refineBox.active {
+  filter: drop-shadow(0 0 0.45rem rgba(239,68,68,.55));
+}
+.refineBox.drafting {
+  border-style: dashed;
+  background: rgba(239,68,68,.08);
+}
+.annotationHint {
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.libraryRefineControls {
+  display: grid;
+  gap: 12px;
+}
+.annotationPanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--raised);
+}
+.annotationPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.annotationPanelHead div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.annotationPanelHead strong { font-size: 14px }
+.annotationPanelHead span {
+  display: inline-grid;
+  place-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--sub);
+  font-size: 11px;
+  font-weight: 700;
+}
+.annotationPanelHead button,
+.annotationRemove {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--sub);
+  font-size: 12px;
+}
+.annotationTools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.annotationTools button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 13px;
+}
+.annotationTools button.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.annotationPanel p,
+.annotationEmpty {
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.annotationList {
+  display: grid;
+  gap: 6px;
+}
+.annotationItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 28px;
+  gap: 6px;
+  align-items: center;
+}
+.annotationItem.active input {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(37,99,235,.1);
+}
+.annotationNumber {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+.annotationItem input {
+  min-height: 34px;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+.annotationRemove {
+  width: 28px;
+  padding: 0;
+  color: var(--red);
+}
 
 /* ─── Products ─── */
 .masterGrid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; align-items: start }
@@ -729,7 +1611,17 @@ textarea { min-height: 72px; resize: vertical }
   gap: 18px;
   align-items: start;
 }
+.settingsLayout.compact {
+  grid-template-columns: minmax(0, 1fr);
+}
 .promptPresetList, .promptEditor { display: grid; gap: 14px }
+.settingsLayout.compact .promptPresetList {
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  align-items: stretch;
+}
+.settingsLayout.compact .promptPresetList > .sectionHead {
+  grid-column: 1 / -1;
+}
 .promptStepCard {
   display: grid;
   gap: 10px;
@@ -738,14 +1630,80 @@ textarea { min-height: 72px; resize: vertical }
   border-radius: var(--r);
   background: var(--raised);
 }
+.promptStepCard.compact { gap: 12px }
+.settingsLayout.compact .promptStepCard.compact {
+  align-content: start;
+  min-height: 100%;
+}
 .promptStepHead {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   align-items: baseline;
 }
+.promptStepHead > div { min-width: 0 }
 .promptStepHead strong { font-size: 13px; color: var(--ink) }
+.promptStepHead p { margin-top: 3px; color: var(--dim); font-size: 11px }
 .promptStepHead span { min-width: 0; color: var(--accent); font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.mutedText { color: var(--dim); font-size: 12px; line-height: 1.4 }
+.promptPresetSelectRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.settingsLayout.compact .promptPresetSelectRow {
+  grid-template-columns: 1fr;
+}
+.promptPresetSelectRow label {
+  display: grid;
+  gap: 6px;
+  color: var(--sub);
+  font-size: 12px;
+}
+.promptActionBar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.settingsLayout.compact .promptActionBar {
+  justify-content: flex-start;
+}
+.promptActionBar button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+.stepModelSettings {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.settingsLayout.compact .stepModelSettings {
+  grid-template-columns: 1fr;
+}
+.stepModelSettings label {
+  display: grid;
+  gap: 4px;
+  color: var(--sub);
+  font-size: 11px;
+}
+.stepModelSettings select {
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.stepSettingHint {
+  margin-top: -4px;
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .promptPresetButtons { display: grid; gap: 6px }
 .promptPresetRow {
   display: grid;
@@ -808,6 +1766,32 @@ textarea { min-height: 72px; resize: vertical }
   font-family: inherit;
   font-size: 10px;
 }
+.fixedGuardrailPanel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: #f7fbfa;
+}
+.fixedGuardrailPanel strong { font-size: 13px }
+.fixedGuardrailPanel div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fixedGuardrailPanel span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.fixedGuardrailPanel p { color: var(--sub); font-size: 12px }
 .promptTextarea {
   min-height: 440px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -822,6 +1806,27 @@ textarea { min-height: 72px; resize: vertical }
 }
 .promptValidation.ok { background: #ecfdf3; color: var(--green) }
 .promptValidation.error { background: #fff1ef; color: var(--red) }
+.promptEditorModal {
+  display: grid;
+  gap: 14px;
+  width: min(1040px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.modalHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+.modalHead h2 { font-size: 18px }
+.modalHead p { margin-top: 4px; color: var(--sub); font-size: 12px }
+.modalHead button { min-height: 34px; padding: 0 12px; font-size: 12px }
 
 ::-webkit-scrollbar { width: 6px; height: 6px }
 ::-webkit-scrollbar-track { background: transparent }
@@ -831,18 +1836,19 @@ textarea { min-height: 72px; resize: vertical }
 .gen-right {
   position: sticky;
   top: 24px;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(220px, 28vh);
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   min-width: 0;
-  height: calc(100vh - 128px);
-  min-height: min(520px, calc(100vh - 128px));
-  max-height: calc(100vh - 48px);
+  height: 100%;
+  min-height: 0;
+  max-height: none;
 }
 .gen-candidates {
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -884,6 +1890,29 @@ textarea { min-height: 72px; resize: vertical }
 }
 .candidateScroll::-webkit-scrollbar-thumb:hover { background: #8f98a5 }
 .gen-candidates .empty { min-height: 180px }
+.genSplitHandle {
+  display: block;
+  flex: 0 0 10px;
+  min-height: 10px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: row-resize;
+}
+.genSplitHandle::before {
+  content: "";
+  display: block;
+  height: 3px;
+  margin: 3px 28%;
+  border-radius: 999px;
+  background: var(--line);
+}
+.genSplitHandle:hover::before,
+.genSplitHandle:focus-visible::before {
+  background: var(--accent);
+}
 
 /* Multi-select check */
 .crop-check {
@@ -896,6 +1925,7 @@ textarea { min-height: 72px; resize: vertical }
 
 /* Inline library in generate tab */
 .gen-library {
+  flex: 0 0 var(--gen-library-height, 300px);
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -923,38 +1953,7 @@ textarea { min-height: 72px; resize: vertical }
 .thumbSizeRow input { width: 132px; min-height: 0; padding: 0; accent-color: var(--accent) }
 .gen-library-files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px }
 .gen-lib-thumb { position: relative; display: block; width: var(--thumb-size, 72px); height: var(--thumb-size, 72px); border: 1px solid var(--line); border-radius: 6px; overflow: visible; background: var(--raised) }
-.gen-lib-thumb img { width: 100%; height: 100%; object-fit: cover }
-.gen-lib-preview {
-  position: absolute;
-  z-index: 30;
-  left: 50%;
-  bottom: calc(100% + 10px);
-  width: min(320px, 44vw);
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--r);
-  background: var(--panel);
-  box-shadow: 0 14px 34px rgba(0,0,0,.18);
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, 6px) scale(.98);
-  transition: opacity .14s ease, transform .14s ease;
-}
-.gen-lib-preview img { width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 6px; background: var(--raised) }
-.gen-lib-preview p {
-  margin-top: 10px;
-  color: var(--sub);
-  font-size: 12px;
-  line-height: 1.5;
-  text-align: left;
-  white-space: pre-wrap;
-}
-.gen-lib-thumb:hover .gen-lib-preview,
-.gen-lib-thumb:focus-visible .gen-lib-preview {
-  opacity: 1;
-  transform: translate(-50%, 0) scale(1);
-}
-
+.gen-lib-thumb img { width: 100%; height: 100%; object-fit: contain }
 .lib-open-link {
   display: block; width: 100%; margin-top: 10px;
   min-height: 36px; padding: 8px 16px;
@@ -966,14 +1965,27 @@ textarea { min-height: 72px; resize: vertical }
 .lib-open-link:hover { background: var(--accent) !important; color: #fff !important }
 
 @media (max-width: 1200px) {
+  .main.generateMain { height: auto; overflow-y: auto }
+  .generateMain .gen-layout { height: auto; overflow: visible }
+  .generateMain .gen-settings { height: auto; overflow: visible }
   .gen-layout { grid-template-columns: 1fr }
   .gen-settings { position: static }
   .gen-right { position: static; height: auto; display: flex; flex-direction: column }
   .gen-candidates { display: block; overflow: visible }
   .candidateScroll, .gen-library-drop { overflow: visible; padding-right: 0 }
-  .gen-library { overflow: visible }
+  .genSplitHandle { display: none }
+  .gen-library { flex-basis: auto; overflow: visible }
   .gen-library-body { height: auto }
+  .settingsLayout.compact .promptPresetList { grid-template-columns: repeat(2, minmax(260px, 1fr)) }
 }
-@media (max-width: 1000px) { .lib-layout, .lib-layout.no-refine { grid-template-columns: 1fr } .masterGrid { grid-template-columns: 1fr } .gen-library-body { grid-template-columns: 1fr } .folderResizeHandle { display: none } }
-@media (max-width: 1000px) { .settingsLayout { grid-template-columns: 1fr } }
+@media (max-width: 1000px) { .lib-layout, .lib-layout.no-refine { grid-template-columns: 1fr; height: auto; overflow: visible } .libraryContentPane { overflow: visible } .masterGrid { grid-template-columns: 1fr } .gen-library-body { grid-template-columns: 1fr } .folderResizeHandle { display: none } }
+@media (max-width: 1000px) {
+  .settingsLayout { grid-template-columns: 1fr }
+  .settingsLayout.compact .promptPresetList { grid-template-columns: 1fr }
+  .stepModelSettings { grid-template-columns: 1fr }
+  .promptPresetSelectRow { grid-template-columns: 1fr }
+  .promptActionBar { justify-content: flex-start }
+  .libraryRefineBody { grid-template-columns: 1fr }
+}
 @media (max-width: 800px) { .app { grid-template-columns: 1fr } .sidebar { display: none } }
+@media (max-width: 800px) { .progressPanel { left: 12px; right: 12px; top: 12px; width: auto } }

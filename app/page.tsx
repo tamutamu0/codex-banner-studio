@@ -63,10 +63,62 @@ type SavedNode = {
   name: string;
   path: string;
   children: SavedNode[];
-  files: Array<{ name: string; displayName?: string; rating?: number; appeal?: string; stylePrompt?: string; url: string; path: string; propertyUrl?: string; propertyPath?: string }>;
+  files: SavedFile[];
+};
+type SavedFile = {
+  name: string;
+  displayName?: string;
+  rating?: number;
+  appeal?: string;
+  stylePrompt?: string;
+  url: string;
+  path: string;
+  propertyUrl?: string;
+  propertyPath?: string;
+  assetId?: string;
+  rootId?: string;
+  parentUrl?: string;
+  sourceUrl?: string;
+  aspectRatio?: string;
+  editInstruction?: string;
+  generationPrompt?: string;
+  product?: {
+    brandName?: string;
+    productName?: string;
+    priceInfo?: string;
+    priceMode?: string;
+  };
+  savedAt?: string;
+  isDisplay?: boolean;
+  versionCount?: number;
+  versions?: SavedFile[];
 };
 type SavedBanner = { url: string; filePath: string; propertyUrl?: string; propertyPath?: string; folderPath: string; folder?: string; tree?: SavedNode; duplicated?: boolean };
 type UnsavedBanner = { url: string; product: string; createdAt: string; historyId: string; variant: Variant };
+type LibraryDetailItem = {
+  kind: "saved" | "unsaved";
+  url: string;
+  title: string;
+  fileName: string;
+  folder: string;
+  rating?: number;
+  appeal?: string;
+  stylePrompt?: string;
+  prompt?: string;
+  path?: string;
+  propertyPath?: string;
+  assetId?: string;
+  rootId?: string;
+  parentUrl?: string;
+  aspectRatio?: string;
+  editInstruction?: string;
+  generationPrompt?: string;
+  versions?: SavedFile[];
+  versionCount?: number;
+  product?: string;
+  createdAt?: string;
+  historyId?: string;
+};
 type BannerPreset = { count: number; divisions: number; sheetRuns: number };
 type CodexSettings = {
   model: string;
@@ -87,6 +139,15 @@ type HistoryRecord = {
   id: string;
   createdAt: string;
   input: ProductInput;
+  generationSettings?: {
+    productId?: string;
+    direction?: string;
+    priceInfo?: string;
+    priceMode?: "all" | "mixed" | "none";
+    divisions?: number;
+    sheetRuns?: number;
+    imagesPerRequest?: number;
+  };
   ideas: Variant[];
   sheetUrl?: string;
   sheetUrls?: string[];
@@ -134,6 +195,46 @@ const promptVariableHelp: Record<PromptStep, Array<{ key: string; label: string;
 const promptRequiredVariables = Object.fromEntries(
   Object.entries(promptVariableHelp).map(([step, vars]) => [step, vars.filter((item) => item.required).map((item) => item.key)]),
 ) as Record<PromptStep, string[]>;
+const fixedPromptVariableCoverage: Record<PromptStep, string[]> = {
+  ideas: ["count", "productInputJson"],
+  sheets: ["brandProductName", "count", "runCount", "totalCandidates", "sheetBlocks", "productImageDescriptions", "productNotes", "priceInfo"],
+  final: ["aspectRatio", "editBlock", "brandName", "productName", "priceInfo", "priceTreatmentText", "productImageDescriptions"],
+};
+const fixedPromptGuardrailSummary: Record<PromptStep, string[]> = {
+  ideas: ["JSONだけで返す", "指定数ぴったり案を返す", "商品情報と矛盾する案を出さない"],
+  sheets: ["指定枚数のPNGを作る", "出力PNGは必ず1:1正方形", "指定分割の均等グリッドにする", "案リスト・商品画像説明・価格方針を必ず使う"],
+  final: ["選択画像ベースで仕上げる", "指定比率で再生成する", "指定外の構図・訴求・価格表示を変えない"],
+};
+const DEFAULT_CODEX_SETTINGS: CodexSettings = { model: "gpt-5.5", effort: "medium", serviceTier: "auto" };
+const imageAspectOptions = [
+  { value: "1024x1024", label: "1:1 正方形" },
+  { value: "1536x1024", label: "3:2 横長" },
+  { value: "1024x1536", label: "2:3 縦長" },
+  { value: "4:5", label: "4:5 SNS縦" },
+  { value: "5:4", label: "5:4 横" },
+  { value: "9:16", label: "9:16 縦長" },
+  { value: "16:9", label: "16:9 横長" },
+  { value: "3:4", label: "3:4 縦" },
+  { value: "4:3", label: "4:3 横" },
+  { value: "auto", label: "自動" },
+];
+function defaultStepCodexSettings(): Record<PromptStep, CodexSettings> {
+  return {
+    ideas: { ...DEFAULT_CODEX_SETTINGS },
+    sheets: { ...DEFAULT_CODEX_SETTINGS },
+    final: { ...DEFAULT_CODEX_SETTINGS },
+  };
+}
+function normalizeCodexSettings(value?: Partial<CodexSettings>): CodexSettings {
+  const model = value?.model || DEFAULT_CODEX_SETTINGS.model;
+  const effortOptions: CodexSettings["effort"][] = ["low", "medium", "high", "xhigh"];
+  const serviceTierOptions: CodexSettings["serviceTier"][] = ["auto", "fast"];
+  return {
+    model: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"].includes(model) ? model : DEFAULT_CODEX_SETTINGS.model,
+    effort: value?.effort && effortOptions.includes(value.effort) ? value.effort : DEFAULT_CODEX_SETTINGS.effort,
+    serviceTier: value?.serviceTier && serviceTierOptions.includes(value.serviceTier) ? value.serviceTier : DEFAULT_CODEX_SETTINGS.serviceTier,
+  };
+}
 type ProgressState = {
   active: boolean;
   title: string;
@@ -147,6 +248,37 @@ type HoverPreview = {
   x: number;
   y: number;
   placement: "above" | "below";
+};
+type RefineAnnotation = {
+  id: string;
+  kind: "pin" | "box";
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+  text: string;
+};
+type RefineAnnotationDraft = {
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} | null;
+type FolderDropZone = "inside" | "before" | "after";
+type FolderDragState = {
+  source: string;
+  target: string;
+  zone: FolderDropZone | "";
+  movedTo?: string;
+};
+type MarqueeSelectionState = {
+  active: boolean;
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
 };
 
 const bannerPresets: BannerPreset[] = [
@@ -281,6 +413,7 @@ export default function Home() {
   const [newSaveFolderName, setNewSaveFolderName] = useState("");
   const [libraryFolderWidth, setLibraryFolderWidth] = useState(340);
   const [libraryThumbSize, setLibraryThumbSize] = useState(72);
+  const [genLibraryHeight, setGenLibraryHeight] = useState(300);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState("");
   const [direction, setDirection] = useState("");
@@ -288,22 +421,24 @@ export default function Home() {
   const [priceMode, setPriceMode] = useState<"all" | "mixed" | "none">("all");
   const [editInstruction, setEditInstruction] = useState("");
   const [finalEditInstruction, setFinalEditInstruction] = useState("");
-  const [aspectRatio, setAspectRatio] = useState("1:1");
+  const [aspectRatio, setAspectRatio] = useState("1024x1024");
   const [status, setStatus] = useState("商品を選んでスタート");
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [libraryRefineBusy, setLibraryRefineBusy] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>("default");
   const [progress, setProgress] = useState<ProgressState>({ active: false, title: "待機中", detail: "", current: 0, total: 0 });
   const [divisions, setDivisions] = useState(4);
   const [sheetRuns, setSheetRuns] = useState(2);
   const [imagesPerRequest, setImagesPerRequest] = useState(1);
-  const [codexSettings, setCodexSettings] = useState<CodexSettings>({ model: "gpt-5.5", effort: "medium", serviceTier: "auto" });
+  const [stepCodexSettings, setStepCodexSettings] = useState<Record<PromptStep, CodexSettings>>(defaultStepCodexSettings);
   const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
   const [selectedPromptPresetIds, setSelectedPromptPresetIds] = useState<Record<PromptStep, string>>({ ideas: "default-ideas", sheets: "default-sheets", final: "default-final" });
   const [promptDraftStep, setPromptDraftStep] = useState<PromptStep>("ideas");
   const [promptDraftId, setPromptDraftId] = useState("");
   const [promptDraftName, setPromptDraftName] = useState("");
   const [promptDraftTemplate, setPromptDraftTemplate] = useState("");
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [rateLimitInfo, setRateLimitInfo] = useState<RateLimitInfo | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [logs, setLogs] = useState<DebugEntry[]>([
@@ -313,15 +448,25 @@ export default function Home() {
   const [libSelectedUrl, setLibSelectedUrl] = useState("");
   const [libSelectedUrls, setLibSelectedUrls] = useState<Set<string>>(new Set());
   const [libSelectionAnchorUrl, setLibSelectionAnchorUrl] = useState("");
-  const [libAspectRatio, setLibAspectRatio] = useState("1:1");
+  const [libAspectRatio, setLibAspectRatio] = useState("1024x1024");
   const [libEditInstruction, setLibEditInstruction] = useState("");
   const [libFinalUrl, setLibFinalUrl] = useState("");
+  const [libRefineOpen, setLibRefineOpen] = useState(false);
+  const [refineAnnotations, setRefineAnnotations] = useState<RefineAnnotation[]>([]);
+  const [refineAnnotationTool, setRefineAnnotationTool] = useState<"pin" | "box">("pin");
+  const [refineAnnotationDraft, setRefineAnnotationDraft] = useState<RefineAnnotationDraft>(null);
+  const [activeRefineAnnotationId, setActiveRefineAnnotationId] = useState("");
+  const [versionModalUrl, setVersionModalUrl] = useState("");
   const [librarySearch, setLibrarySearch] = useState("");
-  const [libraryRatingFilter, setLibraryRatingFilter] = useState(0);
+  const [libraryRatingFilter, setLibraryRatingFilter] = useState("all");
+  const [libraryDetailCollapsed, setLibraryDetailCollapsed] = useState(false);
   const [ratingHover, setRatingHover] = useState<{ url: string; rating: number } | null>(null);
   const [selectedCropUrls, setSelectedCropUrls] = useState<Set<string>>(new Set());
   const [cropSelectionAnchorUrl, setCropSelectionAnchorUrl] = useState("");
   const [hoverPreview, setHoverPreview] = useState<HoverPreview | null>(null);
+  const [folderDrag, setFolderDrag] = useState<FolderDragState>({ source: "", target: "", zone: "" });
+  const [libraryFileDropTarget, setLibraryFileDropTarget] = useState<string | null>(null);
+  const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelectionState>({ active: false, startX: 0, startY: 0, currentX: 0, currentY: 0 });
 
   const selectedProduct = products.find((product) => product.id === selectedProductId) || products[0];
   const totalCandidates = divisions * sheetRuns;
@@ -354,7 +499,7 @@ export default function Home() {
     };
   }, [promptPresets, selectedPromptPresetIds]);
 
-  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); void loadPromptPresets(); }, []);
+  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); void loadPromptPresets(); loadStepCodexSettings(); }, []);
 
   useEffect(() => {
     void loadRateLimitInfo();
@@ -371,14 +516,6 @@ export default function Home() {
   useEffect(() => {
     newImagesRef.current = newImages;
   }, [newImages]);
-
-  useEffect(() => {
-    if (tab !== "settings" || promptDraftTemplate || !promptPresets.length) return;
-    const base = promptPresets.find((preset) => preset.step === promptDraftStep && preset.builtIn) || promptPresets.find((preset) => preset.step === promptDraftStep);
-    if (!base) return;
-    setPromptDraftName(`${base.name}のコピー`);
-    setPromptDraftTemplate(base.template);
-  }, [tab, promptDraftStep, promptDraftTemplate, promptPresets]);
 
   useEffect(() => () => {
     for (const row of newImagesRef.current) {
@@ -433,8 +570,12 @@ export default function Home() {
     return promptPresets.filter((preset) => preset.step === step);
   }
 
+  function selectedPromptPreset(step: PromptStep) {
+    return promptPresetsFor(step).find((preset) => preset.id === selectedPromptPresetIds[step]) || promptPresetsFor(step)[0];
+  }
+
   function promptMissingVariables(step: PromptStep, template = promptDraftTemplate) {
-    return promptRequiredVariables[step].filter((key) => !template.includes(`{{${key}}}`));
+    return promptRequiredVariables[step].filter((key) => !template.includes(`{{${key}}}`) && !fixedPromptVariableCoverage[step].includes(key));
   }
 
   function choosePromptPreset(step: PromptStep, id: string) {
@@ -444,12 +585,55 @@ export default function Home() {
     setStatus(`${promptStepLabels[step]} のプリセットを切り替えました`);
   }
 
+  function loadStepCodexSettings() {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("stepCodexSettings");
+    if (!stored) return;
+    try {
+      const parsed = JSON.parse(stored) as Partial<Record<PromptStep, Partial<CodexSettings>>>;
+      setStepCodexSettings((current) => {
+        const next = { ...current };
+        for (const step of Object.keys(promptStepLabels) as PromptStep[]) {
+          next[step] = normalizeCodexSettings({ ...current[step], ...(parsed[step] || {}) });
+        }
+        return next;
+      });
+    } catch {
+      window.localStorage.removeItem("stepCodexSettings");
+    }
+  }
+
+  function updateStepCodexSettings(step: PromptStep, patch: Partial<CodexSettings>) {
+    setStepCodexSettings((current) => {
+      const next = { ...current, [step]: { ...current[step], ...patch } };
+      if (typeof window !== "undefined") window.localStorage.setItem("stepCodexSettings", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function openPromptPresetEditor(step: PromptStep, mode: "create" | "edit" | "copy", preset?: PromptPreset) {
+    const base = preset || selectedPromptPreset(step) || promptPresetsFor(step)[0];
+    setPromptDraftStep(step);
+    setPromptDraftId(mode === "edit" && base ? base.id : "");
+    setPromptDraftName(mode === "create" ? "" : base ? mode === "copy" ? `${base.name}のコピー` : base.name : "");
+    setPromptDraftTemplate(mode === "create" ? base?.template || "" : base?.template || "");
+    setPromptEditorOpen(true);
+  }
+
+  function closePromptPresetEditor() {
+    setPromptEditorOpen(false);
+    setPromptDraftId("");
+    setPromptDraftName("");
+    setPromptDraftTemplate("");
+  }
+
   function editPromptPreset(preset: PromptPreset, copy = false) {
     setPromptDraftStep(preset.step);
-    setPromptDraftId(copy || preset.builtIn ? "" : preset.id);
-    setPromptDraftName(copy || preset.builtIn ? `${preset.name}のコピー` : preset.name);
+    setPromptDraftId(copy ? "" : preset.id);
+    setPromptDraftName(copy ? `${preset.name}のコピー` : preset.name);
     setPromptDraftTemplate(preset.template);
     setTab("settings");
+    setPromptEditorOpen(true);
   }
 
   function insertPromptVariable(key: string) {
@@ -480,6 +664,7 @@ export default function Home() {
       setPromptPresets(data.presets || []);
       if (data.preset?.id) choosePromptPreset(data.preset.step, data.preset.id);
       setPromptDraftId(data.preset?.id || promptDraftId);
+      setPromptEditorOpen(false);
       setStatus("プロンプトプリセットを保存しました");
       addLog({ level: "success", title: "プロンプト保存", detail: `${promptStepLabels[promptDraftStep]} / ${promptDraftName}` });
     } catch (error) {
@@ -558,7 +743,7 @@ export default function Home() {
       const response = await fetch("/api/brands", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: editingBrandId, name }),
+        body: JSON.stringify({ id: editingBrandId, oldName: current?.name, name }),
       });
       if (!response.ok) throw new Error(await response.text());
       const data = (await response.json()) as { brands: Brand[]; affectedProducts: number };
@@ -740,12 +925,25 @@ export default function Home() {
     setEditInstruction("");
     setFinalUrl(record.finalUrl || "");
     setFinalEditInstruction("");
-    if (record.input?.productId) setSelectedProductId(record.input.productId);
-    if (record.input?.priceInfo !== undefined) setPriceInfo(record.input.priceInfo || "");
-    if (record.input?.priceMode) setPriceMode(record.input.priceMode);
+    const settings = record.generationSettings;
+    if (settings?.productId || record.input?.productId) setSelectedProductId(settings?.productId || record.input.productId || "");
+    if (settings?.direction !== undefined) setDirection(settings.direction || "");
+    if (settings?.priceInfo !== undefined) setPriceInfo(settings.priceInfo || "");
+    else if (record.input?.priceInfo !== undefined) setPriceInfo(record.input.priceInfo || "");
+    if (settings?.priceMode) setPriceMode(settings.priceMode);
+    else if (record.input?.priceMode) setPriceMode(record.input.priceMode);
+    if (settings?.divisions) setDivisions(settings.divisions);
+    if (settings?.sheetRuns) setSheetRuns(settings.sheetRuns);
+    if (settings?.imagesPerRequest) setImagesPerRequest(settings.imagesPerRequest);
     if (typeof window !== "undefined") window.localStorage.setItem("lastGenerationHistoryId", record.id);
     setStatus(silent ? `${historyLabel(record)} を復元しました` : `${historyLabel(record)} を再表示しました`);
-    addLog({ level: "success", title: silent ? "前回の生成結果を復元" : "履歴を再表示", detail: `${historyLabel(record)}\nシート=${urls.length}枚 / 候補=${record.ideas?.length || 0}案` });
+    addLog({
+      level: "success",
+      title: silent ? "前回の生成結果を復元" : "履歴を再表示",
+      detail: `${historyLabel(record)}
+シート=${urls.length}枚 / 候補=${record.ideas?.length || 0}案
+設定=${settings ? `${settings.divisions || "-"}分割 × ${settings.sheetRuns || "-"}回 / 1度で${settings.imagesPerRequest || "-"}枚` : "旧履歴のため作成設定なし"}`,
+    });
   }
 
   function loadHistoryRecord(recordId: string) {
@@ -758,6 +956,15 @@ export default function Home() {
   async function saveGenerationHistory(input: ProductInput, variants: Variant[], urls: string[]) {
     const result = await postJson<{ record: HistoryRecord; history: HistoryRecord[] }>("/api/save", {
       input,
+      generationSettings: {
+        productId: input.productId,
+        direction,
+        priceInfo,
+        priceMode,
+        divisions,
+        sheetRuns,
+        imagesPerRequest,
+      },
       ideas: variants,
       sheetUrl: urls[0],
       sheetUrls: urls,
@@ -966,9 +1173,17 @@ export default function Home() {
     const requestModeLabel = `${divisions}分割シートを${requestImageCount}枚ずつ直列生成`;
     setStatus(`${targetCount}パターンを作成中…`);
     startProgress("バナー作成中", "デザイン案を準備しています", 1 + plannedSheets);
-    addLog({ level: "info", title: "バナー作成開始", detail: `${productInput.brandName || ""} ${productInput.productName} / ${targetCount}パターン\n設定=${codexSettings.model} / ${codexSettings.effort} / ${codexSettings.serviceTier}\n${requestModeLabel}` });
+    addLog({
+      level: "info",
+      title: "バナー作成開始",
+      detail: `${productInput.brandName || ""} ${productInput.productName} / ${targetCount}パターン
+Step1=${stepCodexSettings.ideas.model} / ${stepCodexSettings.ideas.effort} / ${stepCodexSettings.ideas.serviceTier}
+Step2=${stepCodexSettings.sheets.model} / ${stepCodexSettings.sheets.effort} / ${stepCodexSettings.sheets.serviceTier}
+Step3=${stepCodexSettings.final.model} / ${stepCodexSettings.final.effort} / ${stepCodexSettings.final.serviceTier}
+${requestModeLabel}`,
+    });
     try {
-      const ideaResult = await postJson<{ variants: Variant[]; mode: Mode; debug?: ApiDebug }>("/api/ideas", { ...productInput, count: targetCount, divisions: chunkDivision, sheetRuns: plannedSheets, cancelKey, promptTemplates: activePromptTemplates }, activeAbortRef.current?.signal);
+      const ideaResult = await postJson<{ variants: Variant[]; mode: Mode; debug?: ApiDebug }>("/api/ideas", { ...productInput, count: targetCount, divisions: chunkDivision, sheetRuns: plannedSheets, cancelKey, codexSettings: stepCodexSettings.ideas, promptTemplates: activePromptTemplates }, activeAbortRef.current?.signal);
       if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
       updateProgress({ current: 1, detail: `画像を生成しています… 0/${plannedSheets}シート` });
       addLog({ level: "success", title: `訴求案生成完了: ${ideaResult.mode}`, detail: `${formatDebug(ideaResult.debug)}\n案数=${ideaResult.variants.length}\n${ideaResult.variants.map((variant) => `${variant.index}. ${variant.appeal || ""} / ${variant.prompt}`).join("\n")}` });
@@ -991,7 +1206,7 @@ export default function Home() {
           divisions: currentDivisions,
           sheetRuns: currentSheetRuns,
           cancelKey,
-          codexSettings,
+          codexSettings: stepCodexSettings.sheets,
           promptTemplates: activePromptTemplates,
         }, activeAbortRef.current?.signal);
         if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
@@ -1065,7 +1280,7 @@ export default function Home() {
         editInstruction: instruction,
         aspectRatio,
         cancelKey,
-        codexSettings,
+        codexSettings: stepCodexSettings.final,
         promptTemplates: activePromptTemplates,
       }, activeAbortRef.current?.signal);
     setFinalUrl(result.finalUrl);
@@ -1271,6 +1486,8 @@ export default function Home() {
 
   async function moveSaveFolder(sourceFolder: string, targetFolder: string, beforeFolder = "") {
     if (!sourceFolder) return;
+    const sourceName = sourceFolder.split("/").filter(Boolean).pop() || sourceFolder;
+    setFolderDrag((current) => ({ ...current, movedTo: targetFolder ? `${targetFolder}/${sourceName}` : sourceName }));
     try {
       const result = await postJson<{ folder: string; tree: SavedNode; rootPath: string }>("/api/export", {
         action: "moveFolder",
@@ -1283,16 +1500,32 @@ export default function Home() {
       if (selectedSaveFolder === sourceFolder || selectedSaveFolder.startsWith(`${sourceFolder}/`)) {
         selectSavedFolder(result.folder || targetFolder);
       }
+      setStatus("フォルダを移動しました");
       addLog({ level: "success", title: "フォルダ移動", detail: `${sourceFolder} → ${result.folder || targetFolder}` });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatus("フォルダ移動エラー");
       addLog({ level: "error", title: "フォルダ移動エラー", detail: message });
+    } finally {
+      window.setTimeout(() => setFolderDrag({ source: "", target: "", zone: "" }), 450);
     }
+  }
+
+  function setSubtleDragImage(event: React.DragEvent, imageUrl?: string, label = "移動") {
+    if (typeof document === "undefined") return;
+    const ghost = document.createElement("div");
+    ghost.className = "dragGhost";
+    if (imageUrl) ghost.style.backgroundImage = `url("${imageUrl}")`;
+    ghost.innerHTML = `<span>${label}</span>`;
+    document.body.appendChild(ghost);
+    event.dataTransfer.setDragImage(ghost, 24, 24);
+    window.setTimeout(() => ghost.remove(), 0);
   }
 
   function startImageDrag(event: React.DragEvent, sourceUrl?: string, variant?: Variant | null, stage: "candidate" | "final" = "candidate") {
     if (!sourceUrl) return;
+    const count = selectedCropUrls.size > 1 && selectedCropUrls.has(sourceUrl) ? selectedCropUrls.size : 1;
+    setSubtleDragImage(event, sourceUrl, count > 1 ? `${count}枚` : "保存");
     // If multi-selected, drag all selected
     if (selectedCropUrls.size > 1 && selectedCropUrls.has(sourceUrl)) {
       const items = sheetVariants.filter(v => v.cropUrl && selectedCropUrls.has(v.cropUrl)).map(v => ({ sourceUrl: v.cropUrl, variant: v, stage }));
@@ -1334,22 +1567,16 @@ export default function Home() {
       }
     }
 
-    if (event.metaKey || event.ctrlKey) {
-      setSelectedCropUrls((current) => {
-        const next = new Set(current);
-        if (next.has(variant.cropUrl!)) next.delete(variant.cropUrl!);
-        else next.add(variant.cropUrl!);
-        return next;
-      });
-      setCropSelectionAnchorUrl(variant.cropUrl);
-      return;
-    }
-
-    setSelectedCropUrls(new Set([variant.cropUrl]));
+    setSelectedCropUrls((current) => {
+      const next = new Set(current);
+      if (next.has(variant.cropUrl!)) next.delete(variant.cropUrl!);
+      else next.add(variant.cropUrl!);
+      return next;
+    });
     setCropSelectionAnchorUrl(variant.cropUrl);
   }
 
-  function libraryCaption(item: SavedNode["files"][number]) {
+  function libraryCaption(item: SavedFile) {
     return [item.appeal, item.stylePrompt].filter(Boolean).join("\n");
   }
 
@@ -1379,12 +1606,20 @@ export default function Home() {
   }
 
   function startLibraryFileDrag(event: React.DragEvent, sourceUrl: string) {
+    const count = libSelectedUrls.size > 1 && libSelectedUrls.has(sourceUrl) ? libSelectedUrls.size : 1;
+    setSubtleDragImage(event, sourceUrl, count > 1 ? `${count}枚` : "移動");
     event.dataTransfer.setData("application/library-file", sourceUrl);
     event.dataTransfer.effectAllowed = "move";
   }
 
   function countFiles(node: SavedNode): number {
     return node.files.length + node.children.reduce((sum, child) => sum + countFiles(child), 0);
+  }
+
+  function folderCountLabel(node: SavedNode) {
+    const own = node.files.length;
+    const total = countFiles(node);
+    return total > own ? `${own} (${total})` : String(own);
   }
 
   function selectedSaveNode(node: SavedNode | null = saveTree): SavedNode | null {
@@ -1424,7 +1659,9 @@ export default function Home() {
     const query = librarySearch.trim().toLowerCase();
     return files.filter((file) => {
       const nameMatch = !query || [file.displayName, file.name, file.url].filter(Boolean).join(" ").toLowerCase().includes(query);
-      const ratingMatch = !libraryRatingFilter || (file.rating || 0) >= libraryRatingFilter;
+      const rating = file.rating || 0;
+      const ratingMatch = libraryRatingFilter === "all"
+        || (libraryRatingFilter === "unrated" ? rating === 0 : rating >= Number(libraryRatingFilter));
       return nameMatch && ratingMatch;
     });
   }
@@ -1434,8 +1671,11 @@ export default function Home() {
     const walk = (node: SavedNode | null) => {
       if (!node) return;
       for (const file of node.files) {
-        if (file.url) urls.add(file.url);
-        if (file.url.startsWith("/saved-banners/")) urls.add(file.url.replace("/saved-banners/", "/generated/"));
+        for (const version of file.versions?.length ? file.versions : [file]) {
+          if (version.url) urls.add(version.url);
+          if (version.sourceUrl) urls.add(version.sourceUrl);
+          if (version.url.startsWith("/saved-banners/")) urls.add(version.url.replace("/saved-banners/", "/generated/"));
+        }
       }
       for (const child of node.children) walk(child);
     };
@@ -1463,16 +1703,291 @@ export default function Home() {
     });
   }
 
+  function fileNameFromUrl(url: string) {
+    return decodeURIComponent(url.split("/").pop()?.split("?")[0] || "banner.png");
+  }
+
+  function folderLabelFromSavedUrl(url: string) {
+    const folder = decodeURIComponent(url.replace("/saved-banners/", "").split("/").slice(0, -1).join("/"));
+    return folder || "保存済み";
+  }
+
+  function folderPathFromSavedUrl(url: string) {
+    return decodeURIComponent(url.replace("/saved-banners/", "").split("/").slice(0, -1).join("/"));
+  }
+
+  function findSavedFileGroup(url: string) {
+    for (const file of collectLibraryFiles(saveTree)) {
+      if (file.url === url || file.versions?.some((version) => version.url === url)) return file;
+    }
+    return null;
+  }
+
+  function findSavedFileVersion(url: string) {
+    const group = findSavedFileGroup(url);
+    return group?.versions?.find((version) => version.url === url) || (group?.url === url ? group : null);
+  }
+
+  function productInputForLibraryUrl(url: string): ProductInput {
+    const group = findSavedFileGroup(url);
+    const sourceVersion = findSavedFileVersion(url);
+    const rootVersion = group?.versions?.find((version) => !version.parentUrl) || group;
+    const productMeta = rootVersion?.product?.productName ? rootVersion.product : sourceVersion?.product;
+    const folderParts = folderPathFromSavedUrl(url).split("/").filter(Boolean);
+    const folderBrand = folderParts[0] || "";
+    const folderProduct = folderParts[1] || "";
+    const productName = productMeta?.productName || folderProduct || "バナー";
+    const brandName = productMeta?.brandName || folderBrand || "";
+    const matchedProduct = products.find((product) => {
+      const sameName = product.name === productName;
+      const sameBrand = !brandName || product.brandName === brandName;
+      return sameName && sameBrand;
+    }) || products.find((product) => product.name === productName);
+    const firstImage = matchedProduct?.images?.[0];
+    return {
+      productId: matchedProduct?.id,
+      brandName: matchedProduct?.brandName || brandName,
+      productName: matchedProduct?.name || productName,
+      format: "WEB広告バナー候補",
+      productImageUrl: firstImage?.url || matchedProduct?.imageUrl,
+      productImagePath: firstImage?.path || matchedProduct?.imagePath,
+      productImages: matchedProduct?.images || [],
+      notes: matchedProduct?.notes || "",
+      priceInfo: productMeta?.priceInfo || matchedProduct?.priceInfo || "",
+      priceMode: (productMeta?.priceMode === "mixed" || productMeta?.priceMode === "none" || productMeta?.priceMode === "all")
+        ? productMeta.priceMode
+        : "all",
+    };
+  }
+
+  function savedVersionLabel(version: SavedFile, index: number) {
+    if (!version.parentUrl) return "オリジナル";
+    return `派生 ${index}`;
+  }
+
+  function sortSavedVersionsForUi(versions: SavedFile[]) {
+    return [...versions].sort((a, b) => (b.savedAt || b.name).localeCompare(a.savedAt || a.name, "ja"));
+  }
+
+  function parentVersionFor(group: SavedFile | null, version: SavedFile) {
+    if (!version.parentUrl) return null;
+    return group?.versions?.find((item) => item.url === version.parentUrl) || null;
+  }
+
+  function renderSourcePreview(url?: string, label?: string) {
+    if (!url) return null;
+    return (
+      <span
+        className="sourcePreviewLink"
+        onMouseEnter={(event) => showHoverPreview(event, url, label || "生成元")}
+        onMouseMove={(event) => showHoverPreview(event, url, label || "生成元")}
+        onMouseLeave={() => setHoverPreview(null)}
+      >
+        <img src={url} alt="" />
+        <span>{label || "生成元"}</span>
+      </span>
+    );
+  }
+
+  function selectedLibraryDetails(): LibraryDetailItem[] {
+    if (!libSelectedUrls.size) return [];
+    if (libraryView === "saved") {
+      return currentLibraryFiles()
+        .filter((file) => libSelectedUrls.has(file.url))
+        .map((file) => ({
+          kind: "saved" as const,
+          url: file.url,
+          title: file.displayName || file.name.replace(/\.(png|jpe?g|webp)$/i, ""),
+          fileName: file.name,
+          folder: folderLabelFromSavedUrl(file.url),
+          rating: file.rating || 0,
+          appeal: file.appeal || "",
+          stylePrompt: file.stylePrompt || "",
+          path: file.path,
+          propertyPath: file.propertyPath || "",
+          assetId: file.assetId,
+          rootId: file.rootId,
+          parentUrl: file.parentUrl,
+          aspectRatio: file.aspectRatio,
+          editInstruction: file.editInstruction,
+          generationPrompt: file.generationPrompt,
+          versions: file.versions || [file],
+          versionCount: file.versionCount || 1,
+        }));
+    }
+    return unsavedLibraryFiles()
+      .filter((item) => libSelectedUrls.has(item.url))
+      .map((item) => ({
+        kind: "unsaved" as const,
+        url: item.url,
+        title: item.variant.appeal || "未保存候補",
+        fileName: fileNameFromUrl(item.url),
+        folder: "未保存",
+        appeal: item.variant.appeal || "",
+        stylePrompt: item.variant.prompt || "",
+        prompt: item.variant.prompt || "",
+        product: item.product,
+        createdAt: item.createdAt,
+        historyId: item.historyId,
+      }));
+  }
+
+  function commonValue(values: Array<string | undefined>) {
+    const unique = Array.from(new Set(values.filter(Boolean) as string[]));
+    if (!unique.length) return "-";
+    return unique.length === 1 ? unique[0] : `複数（${unique.length}種類）`;
+  }
+
+  function ratingSummary(items: LibraryDetailItem[]) {
+    const rated = items.map((item) => item.rating || 0).filter((rating) => rating > 0);
+    if (!rated.length) return "未評価";
+    const average = rated.reduce((sum, rating) => sum + rating, 0) / rated.length;
+    return `平均 ${average.toFixed(1)} / ${rated.length}件評価済み`;
+  }
+
   function clearLibrarySelection() {
     setLibSelectedUrl("");
     setLibSelectedUrls(new Set());
     setLibSelectionAnchorUrl("");
     setLibFinalUrl("");
+    setLibRefineOpen(false);
+  }
+
+  function openLibraryRefine(url?: string) {
+    const target = url || Array.from(libSelectedUrls)[0] || libSelectedUrl;
+    if (!target || libraryView !== "saved") return;
+    setLibSelectedUrl(target);
+    setLibFinalUrl("");
+    setRefineAnnotations([]);
+    setRefineAnnotationDraft(null);
+    setActiveRefineAnnotationId("");
+    setLibRefineOpen(true);
+  }
+
+  function refinePointFromEvent(event: React.PointerEvent<HTMLElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)),
+    };
+  }
+
+  function addRefineAnnotation(mark: Omit<RefineAnnotation, "id" | "text">) {
+    const id = `note-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    setRefineAnnotations((items) => [...items, { ...mark, id, text: "" }]);
+    setActiveRefineAnnotationId(id);
+  }
+
+  function startRefineAnnotation(event: React.PointerEvent<HTMLDivElement>) {
+    if (libraryRefineBusy || libFinalUrl) return;
+    event.preventDefault();
+    const point = refinePointFromEvent(event);
+    if (refineAnnotationTool === "pin") {
+      addRefineAnnotation({ kind: "pin", x: point.x, y: point.y });
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setRefineAnnotationDraft({ startX: point.x, startY: point.y, x: point.x, y: point.y, width: 0, height: 0 });
+  }
+
+  function moveRefineAnnotation(event: React.PointerEvent<HTMLDivElement>) {
+    if (!refineAnnotationDraft || refineAnnotationTool !== "box") return;
+    const point = refinePointFromEvent(event);
+    const x = Math.min(refineAnnotationDraft.startX, point.x);
+    const y = Math.min(refineAnnotationDraft.startY, point.y);
+    const width = Math.abs(point.x - refineAnnotationDraft.startX);
+    const height = Math.abs(point.y - refineAnnotationDraft.startY);
+    setRefineAnnotationDraft({ ...refineAnnotationDraft, x, y, width, height });
+  }
+
+  function finishRefineAnnotation(event: React.PointerEvent<HTMLDivElement>) {
+    if (!refineAnnotationDraft || refineAnnotationTool !== "box") return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    const draft = refineAnnotationDraft;
+    setRefineAnnotationDraft(null);
+    if (draft.width < 0.025 && draft.height < 0.025) return;
+    addRefineAnnotation({ kind: "box", x: draft.x, y: draft.y, width: draft.width, height: draft.height });
+  }
+
+  function updateRefineAnnotation(id: string, text: string) {
+    setRefineAnnotations((items) => items.map((item) => item.id === id ? { ...item, text } : item));
+  }
+
+  function removeRefineAnnotation(id: string) {
+    setRefineAnnotations((items) => items.filter((item) => item.id !== id));
+    if (activeRefineAnnotationId === id) setActiveRefineAnnotationId("");
+  }
+
+  function annotationPromptList() {
+    return refineAnnotations.map((item, index) => {
+      const position = item.kind === "box"
+        ? `範囲 x=${Math.round(item.x * 100)}%, y=${Math.round(item.y * 100)}%, w=${Math.round((item.width || 0) * 100)}%, h=${Math.round((item.height || 0) * 100)}%`
+        : `ピン x=${Math.round(item.x * 100)}%, y=${Math.round(item.y * 100)}%`;
+      return `${index + 1}. ${position}: ${item.text.trim() || "この位置を自然に調整する"}`;
+    }).join("\n");
+  }
+
+  function loadImageForCanvas(url: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("修正メモ画像を作れませんでした"));
+      image.src = url;
+    });
+  }
+
+  async function renderAnnotatedImageDataUrl(sourceUrl: string, annotations: RefineAnnotation[]) {
+    const image = await loadImageForCanvas(sourceUrl);
+    const canvas = document.createElement("canvas");
+    const width = image.naturalWidth || image.width || 1200;
+    const height = image.naturalHeight || image.height || 1200;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("修正メモ画像を作れませんでした");
+    ctx.drawImage(image, 0, 0, width, height);
+    const scale = Math.max(width, height);
+    const line = Math.max(4, Math.round(scale * 0.004));
+    const radius = Math.max(22, Math.round(scale * 0.025));
+    const fontSize = Math.max(24, Math.round(scale * 0.028));
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    annotations.forEach((item, index) => {
+      const number = String(index + 1);
+      ctx.lineWidth = line;
+      ctx.strokeStyle = "#ef4444";
+      ctx.fillStyle = "rgba(239, 68, 68, 0.14)";
+      if (item.kind === "box") {
+        const x = item.x * width;
+        const y = item.y * height;
+        const w = (item.width || 0) * width;
+        const h = (item.height || 0) * height;
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeRect(x, y, w, h);
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+      } else {
+        ctx.beginPath();
+        ctx.arc(item.x * width, item.y * height, radius, 0, Math.PI * 2);
+      }
+      ctx.fillStyle = "#ef4444";
+      ctx.fill();
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = Math.max(3, Math.round(line * 0.8));
+      ctx.stroke();
+      ctx.fillStyle = "#ffffff";
+      ctx.font = `700 ${fontSize}px system-ui, -apple-system, BlinkMacSystemFont, sans-serif`;
+      const labelX = item.kind === "box" ? item.x * width : item.x * width;
+      const labelY = item.kind === "box" ? item.y * height : item.y * height;
+      ctx.fillText(number, labelX, labelY);
+    });
+    return canvas.toDataURL("image/png");
   }
 
   function handleLibraryTileClick(event: React.MouseEvent, url: string, orderedUrls: string[]) {
     setLibSelectedUrl(url);
     setLibFinalUrl("");
+    const additive = event.ctrlKey || event.metaKey;
 
     if (event.shiftKey && libSelectionAnchorUrl) {
       const anchorIndex = orderedUrls.indexOf(libSelectionAnchorUrl);
@@ -1484,19 +1999,68 @@ export default function Home() {
       }
     }
 
-    if (event.metaKey || event.ctrlKey) {
-      setLibSelectedUrls((current) => {
-        const next = new Set(current);
-        if (next.has(url)) next.delete(url);
-        else next.add(url);
-        return next;
-      });
+    if (libraryView === "saved" && !additive) {
+      setLibSelectedUrls(new Set([url]));
       setLibSelectionAnchorUrl(url);
       return;
     }
 
-    setLibSelectedUrls(new Set([url]));
+    setLibSelectedUrls((current) => {
+      const next = new Set(current);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
     setLibSelectionAnchorUrl(url);
+  }
+
+  function updateMarqueeSelection(container: HTMLElement, startX: number, startY: number, currentX: number, currentY: number) {
+    const left = Math.min(startX, currentX);
+    const right = Math.max(startX, currentX);
+    const top = Math.min(startY, currentY);
+    const bottom = Math.max(startY, currentY);
+    const selected: string[] = [];
+    container.querySelectorAll<HTMLElement>(".bannerTile[data-url]").forEach((tile) => {
+      const rect = tile.getBoundingClientRect();
+      const intersects = rect.left <= right && rect.right >= left && rect.top <= bottom && rect.bottom >= top;
+      if (intersects) selected.push(tile.dataset.url || "");
+    });
+    const urls = selected.filter(Boolean);
+    setLibSelectedUrls(new Set(urls));
+    setLibSelectedUrl(urls[0] || "");
+    setLibSelectionAnchorUrl(urls[0] || "");
+    setLibFinalUrl("");
+  }
+
+  function startLibraryMarquee(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || event.target !== event.currentTarget) return;
+    event.preventDefault();
+    const container = event.currentTarget;
+    container.setPointerCapture(event.pointerId);
+    setHoverPreview(null);
+    clearLibrarySelection();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    setMarqueeSelection({ active: true, startX, startY, currentX: startX, currentY: startY });
+  }
+
+  function moveLibraryMarquee(event: React.PointerEvent<HTMLDivElement>) {
+    if (!marqueeSelection.active) return;
+    event.preventDefault();
+    const currentX = event.clientX;
+    const currentY = event.clientY;
+    setMarqueeSelection((current) => ({ ...current, currentX, currentY }));
+    updateMarqueeSelection(event.currentTarget, marqueeSelection.startX, marqueeSelection.startY, currentX, currentY);
+  }
+
+  function endLibraryMarquee(event: React.PointerEvent<HTMLDivElement>) {
+    if (!marqueeSelection.active) return;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+    setMarqueeSelection((current) => ({ ...current, active: false }));
   }
 
   async function updateLibraryFileMeta(fileUrl: string, patch: { displayName?: string; rating?: number }) {
@@ -1515,6 +2079,25 @@ export default function Home() {
     }
   }
 
+  async function setLibraryDisplayVersion(fileUrl: string) {
+    try {
+      const result = await postJson<{ tree: SavedNode }>("/api/export", {
+        action: "setDisplayVersion",
+        fileUrl,
+      });
+      setSaveTree(result.tree);
+      setVersionModalUrl(fileUrl);
+      setLibSelectedUrl(fileUrl);
+      setLibSelectedUrls(new Set([fileUrl]));
+      setStatus("ライブラリに表示する画像を切り替えました");
+      addLog({ level: "success", title: "表示バージョン切替", detail: fileUrl });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus("表示バージョンの切替エラー");
+      addLog({ level: "error", title: "表示バージョンの切替エラー", detail: message });
+    }
+  }
+
   function saveBreadcrumb() {
     const parts = selectedSaveFolder.split("/").filter(Boolean);
     return [{ name: "保存済み", path: "" }, ...parts.map((part, index) => ({ name: part, path: parts.slice(0, index + 1).join("/") }))];
@@ -1527,6 +2110,22 @@ export default function Home() {
     const onMove = (moveEvent: PointerEvent) => {
       const next = Math.min(560, Math.max(260, startWidth + moveEvent.clientX - startX));
       setLibraryFolderWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  function startGenerateSplitResize(event: React.PointerEvent) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = genLibraryHeight;
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = Math.min(560, Math.max(200, startHeight - (moveEvent.clientY - startY)));
+      setGenLibraryHeight(next);
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -1554,9 +2153,18 @@ export default function Home() {
       else if (zone === "before") void moveSaveFolder(source, parentPath, node.path);
       else void moveSaveFolder(source, parentPath, nextSiblingFolderPath(parentPath, node.path));
     };
+    const isDragging = folderDrag.source === node.path && Boolean(node.path);
+    const isDropTarget = folderDrag.target === node.path && Boolean(folderDrag.zone);
+    const isMoved = folderDrag.movedTo === node.path;
+    const rowClass = [
+      isDragging ? "dragging" : "",
+      isDropTarget ? `drop-${folderDrag.zone}` : "",
+      libraryFileDropTarget === node.path ? "file-drop-target" : "",
+      isMoved ? "justMoved" : "",
+    ].filter(Boolean).join(" ");
     return (
       <div className="folderNode" key={node.path || "root"}>
-        <div className="folderNodeRow">
+        <div className={`folderNodeRow ${rowClass}`}>
           <button
             className={isActive ? "active" : ""}
             type="button"
@@ -1565,7 +2173,10 @@ export default function Home() {
               if (!node.path) return;
               event.dataTransfer.setData("application/library-folder", node.path);
               event.dataTransfer.effectAllowed = "move";
+              setFolderDrag({ source: node.path, target: "", zone: "" });
+              setStatus(`フォルダ「${node.name}」を移動中`);
             }}
+            onDragEnd={() => setFolderDrag((current) => current.movedTo ? current : { source: "", target: "", zone: "" })}
             onClick={() => selectSavedFolder(node.path)}
             onDragOver={(event) => {
               const folderPath = event.dataTransfer.types.includes("application/library-folder");
@@ -1574,23 +2185,40 @@ export default function Home() {
                 if (canDropFolder(source)) {
                   event.preventDefault();
                   event.dataTransfer.dropEffect = "move";
+                  setLibraryFileDropTarget(null);
+                  setFolderDrag({ source, target: node.path, zone: folderDropZone(event) });
                 }
                 return;
               }
-              event.preventDefault();
+              const imageDrop = event.dataTransfer.types.includes("application/library-file") || event.dataTransfer.types.includes("application/json");
+              if (imageDrop) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = event.dataTransfer.types.includes("application/library-file") ? "move" : "copy";
+                setHoverPreview(null);
+                setFolderDrag((current) => current.source ? current : { source: "", target: "", zone: "" });
+                setLibraryFileDropTarget(node.path);
+              }
+            }}
+            onDragLeave={(event) => {
+              const next = event.relatedTarget as Node | null;
+              if (next && event.currentTarget.contains(next)) return;
+              setFolderDrag((current) => current.target === node.path ? { ...current, target: "", zone: "" } : current);
+              setLibraryFileDropTarget((current) => current === node.path ? null : current);
             }}
             onDrop={(event) => {
               const source = event.dataTransfer.getData("application/library-folder");
               if (source) {
                 event.preventDefault();
+                setLibraryFileDropTarget(null);
                 if (canDropFolder(source)) handleFolderDrop(event, source);
                 return;
               }
+              setLibraryFileDropTarget(null);
               dropToSave(event, node.path);
             }}
           >
             <span>{node.path ? node.name : "保存済み"}</span>
-            <small>{countFiles(node)}</small>
+            <small>{folderCountLabel(node)}</small>
           </button>
           {node.path && (
             <button className="folderDelete" type="button" aria-label={`${node.name}を削除`} title="フォルダを削除" onClick={(e) => { e.stopPropagation(); deleteSaveFolder(node.path); }}>×</button>
@@ -1604,21 +2232,40 @@ export default function Home() {
   function selectSavedFolder(path: string) {
     setLibraryView("saved");
     setSelectedSaveFolder(path);
+    setLibrarySearch("");
+    setLibraryRatingFilter("all");
+    setUnsavedHistoryFilter("");
     clearLibrarySelection();
   }
 
-  function renderLibraryAxis() {
+  function selectUnsavedLibrary() {
+    setLibraryView("unsaved");
+    setLibrarySearch("");
+    setLibraryRatingFilter("all");
+    setUnsavedHistoryFilter("");
+    clearLibrarySelection();
+  }
+
+  function renderLibraryAxis(showUnsaved = true) {
     return (
       <>
         <div className="folderTree">
           {saveTree ? renderSaveNode(saveTree) : <div className="empty small">読み込み中</div>}
         </div>
-        <div className="libraryAxis">
-          <button className={libraryView === "unsaved" ? "active" : ""} type="button" onClick={() => { setLibraryView("unsaved"); clearLibrarySelection(); }}>
-            <span>未保存</span>
-            <small>{unsavedLibraryFiles().length}</small>
-          </button>
-        </div>
+        {showUnsaved && (
+          <>
+            <div className="libraryAxisDivider">
+              <span>生成履歴</span>
+            </div>
+            <div className="libraryAxis">
+              <button className={libraryView === "unsaved" ? "active" : ""} type="button" onClick={selectUnsavedLibrary}>
+                <span>未保存</span>
+                <small>{unsavedLibraryFiles().length}</small>
+              </button>
+              <p>整理前の生成候補。使う画像はフォルダへドラッグして保存します。</p>
+            </div>
+          </>
+        )}
       </>
     );
   }
@@ -1692,48 +2339,247 @@ export default function Home() {
   }
 
   async function refineLibraryImage() {
-    if (!libSelectedUrl) return;
-    setBusy(true);
-    setStopping(false);
-    stopRequestedRef.current = false;
+    if (!libSelectedUrl || libraryRefineBusy) return;
+    const sourceLibraryUrl = libSelectedUrl;
+    const libraryProductInput = productInputForLibraryUrl(sourceLibraryUrl);
+    setLibraryRefineBusy(true);
     const cancelKey = `library-final-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    activeCancelKeyRef.current = cancelKey;
-    activeAbortRef.current = new AbortController();
-    setStatus("仕上げ中…");
-    startProgress("仕上げ中", `${libAspectRatio} の画像を作成中`, 1);
+    const controller = new AbortController();
+    setStatus("仕上げ生成中…");
+    addLog({ level: "info", title: "仕上げ生成開始", detail: `${libAspectRatio}\nsource=${sourceLibraryUrl}` });
     try {
+      const annotationImageDataUrl = refineAnnotations.length
+        ? await renderAnnotatedImageDataUrl(sourceLibraryUrl, refineAnnotations)
+        : "";
       const result = await postJson<{ finalUrl: string; mode: Mode; variant: Variant; debug?: ApiDebug }>("/api/final", {
-        input: productInput || { productName: "バナー", productImages: [] },
-        variant: { index: 0, prompt: libEditInstruction || "この画像をベースに仕上げてください", cropUrl: libSelectedUrl, priceTreatment: "no_price" as const },
+        input: libraryProductInput,
+        variant: { index: 0, prompt: libEditInstruction || "この画像をベースに仕上げてください", cropUrl: sourceLibraryUrl, priceTreatment: "without_price" as const },
         aspectRatio: libAspectRatio,
         instruction: libEditInstruction,
+        annotations: refineAnnotations,
+        annotationImageDataUrl,
         cancelKey,
-        codexSettings,
+        codexSettings: stepCodexSettings.final,
         promptTemplates: activePromptTemplates,
-      }, activeAbortRef.current?.signal);
-      setLibFinalUrl(result.finalUrl);
-      setStatus("仕上げ完了！");
-      finishProgress("仕上げ完了", "ライブラリで確認できます");
-      addLog({ level: "success", title: `仕上げ完了: ${result.mode}`, detail: `${formatDebug(result.debug)} / ${result.finalUrl}` });
+      }, controller.signal);
+      const saved = await postJson<SavedBanner>("/api/export", {
+        sourceUrl: result.finalUrl,
+        sourceLibraryUrl,
+        input: libraryProductInput,
+        variant: {
+          ...result.variant,
+          prompt: libEditInstruction || result.debug?.revisedPrompt || result.variant.prompt || "仕上げ生成",
+          cropUrl: result.finalUrl,
+        },
+        stage: "final",
+        aspectRatio: libAspectRatio,
+        editInstruction: [libEditInstruction, annotationPromptList()].filter(Boolean).join("\n\n"),
+        generationPrompt: result.debug?.revisedPrompt || "",
+        folder: folderPathFromSavedUrl(sourceLibraryUrl) || selectedSaveFolder,
+      });
+      if (saved.tree) setSaveTree(saved.tree);
+      if (saved.folder !== undefined) setSelectedSaveFolder(saved.folder);
+      setLibFinalUrl(saved.url);
+      setLibSelectedUrl(saved.url);
+      setLibSelectedUrls(new Set([saved.url]));
+      setVersionModalUrl(saved.url);
+      setStatus("仕上げ生成をライブラリに保存しました");
+      addLog({ level: "success", title: `仕上げ保存完了: ${result.mode}`, detail: `${formatDebug(result.debug)}\n${saved.filePath}` });
       notifyDesktop("仕上げ完了", `${libAspectRatio} のバナーができました`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (stopRequestedRef.current || message.includes("abort") || message.includes("停止")) {
-        setStatus("停止しました");
-        finishProgress("停止しました", "仕上げ生成を停止しました");
-        addLog({ level: "warn", title: "仕上げ停止", detail: message });
-      } else {
-        setStatus("仕上げ時にエラーが発生しました");
-        finishProgress("エラー", message);
-        addLog({ level: "error", title: "仕上げエラー", detail: message });
-      }
+      setStatus("仕上げ時にエラーが発生しました");
+      addLog({ level: "error", title: "仕上げエラー", detail: message });
     } finally {
-      setBusy(false);
-      setStopping(false);
-      activeCancelKeyRef.current = "";
-      activeAbortRef.current = null;
+      setLibraryRefineBusy(false);
     }
   }
+
+  function renderLibraryDetail(items: LibraryDetailItem[]) {
+    if (libraryDetailCollapsed) {
+      return (
+        <aside className="panel libraryDetailPane collapsed">
+          <button type="button" onClick={() => setLibraryDetailCollapsed(false)} title="画像詳細を開く" aria-label="画像詳細を開く">
+            <span className="collapseIcon">‹</span>
+            <span className="collapseLabel">画像詳細</span>
+          </button>
+        </aside>
+      );
+    }
+    if (!items.length) {
+      return (
+        <aside className="panel libraryDetailPane emptyDetail">
+          <div className="detailHead">
+            <div>
+              <h2>画像詳細</h2>
+              <p>画像を選択するとここに詳細が表示されます。</p>
+            </div>
+            <button className="paneCollapseButton" type="button" onClick={() => setLibraryDetailCollapsed(true)} title="画像詳細を折りたたむ" aria-label="画像詳細を折りたたむ">›</button>
+          </div>
+          <div className="detailEmptyBox">
+            <strong>未選択</strong>
+            <span>ファイル名、評価、生成指示、バージョン情報をここで確認できます。</span>
+          </div>
+        </aside>
+      );
+    }
+    if (items.length === 1) {
+      const item = items[0];
+      const promptText = [item.appeal, item.stylePrompt || item.prompt].filter(Boolean).join("\n\n");
+      return (
+        <aside className="panel libraryDetailPane">
+          <div className="detailHead">
+          <div>
+            <h2>画像詳細</h2>
+              <p>{item.kind === "saved" ? `${item.versionCount || 1}バージョン` : "未保存の生成候補"}</p>
+            </div>
+            <div className="detailHeadActions">
+              {item.kind === "saved" ? <button className="ghostIconButton" type="button" onClick={() => openLibraryRefine(item.url)}>仕上げ生成</button> : null}
+              <button className="paneCollapseButton" type="button" onClick={() => setLibraryDetailCollapsed(true)} title="画像詳細を折りたたむ" aria-label="画像詳細を折りたたむ">›</button>
+            </div>
+          </div>
+          <img className="libraryDetailPreview" src={item.url} alt={item.title} />
+          <dl className="detailList">
+            <div><dt>表示名</dt><dd>{item.title}</dd></div>
+            <div><dt>ファイル名</dt><dd className="breakText">{item.fileName}</dd></div>
+            <div><dt>フォルダ</dt><dd>{item.folder}</dd></div>
+            {item.kind === "saved" ? (
+              <>
+                <div><dt>評価</dt><dd className="detailStars">{item.rating ? "★".repeat(item.rating) : "未評価"}</dd></div>
+                <div><dt>比率</dt><dd>{item.aspectRatio || "-"}</dd></div>
+                {item.parentUrl ? <div><dt>生成元</dt><dd>{renderSourcePreview(item.parentUrl, fileNameFromUrl(item.parentUrl))}</dd></div> : null}
+              </>
+            ) : (
+              <>
+                <div><dt>商品</dt><dd>{item.product || "-"}</dd></div>
+                <div><dt>生成日時</dt><dd>{item.createdAt ? formatShortDate(item.createdAt) : "-"}</dd></div>
+              </>
+            )}
+            <div><dt>訴求・スタイル</dt><dd className="detailPrompt">{promptText || "保存されたプロンプト情報はありません"}</dd></div>
+            {item.path ? <div><dt>保存パス</dt><dd className="breakText">{item.path}</dd></div> : null}
+            {item.propertyPath ? <div><dt>プロパティ</dt><dd className="breakText">{item.propertyPath}</dd></div> : null}
+          </dl>
+          {item.kind === "saved" && (item.versionCount || 1) > 1 ? (
+            <button className="detailDownload" type="button" onClick={() => setVersionModalUrl(item.url)}>バージョンを表示</button>
+          ) : null}
+          <a className="detailDownload" href={item.url} download>この画像をダウンロード</a>
+        </aside>
+      );
+    }
+
+    const folders = items.map((item) => item.folder);
+    const products = items.map((item) => item.product);
+    return (
+      <aside className="panel libraryDetailPane">
+        <div className="detailHead">
+          <div>
+            <h2>{items.length}件選択中</h2>
+            <p>{items[0].kind === "saved" ? "保存済みバナーの一括選択" : "未保存候補の一括選択"}</p>
+          </div>
+          <button className="paneCollapseButton" type="button" onClick={() => setLibraryDetailCollapsed(true)} title="画像詳細を折りたたむ" aria-label="画像詳細を折りたたむ">›</button>
+        </div>
+        <div className="detailThumbGrid">
+          {items.slice(0, 12).map((item) => <img key={item.url} src={item.url} alt={item.title} />)}
+          {items.length > 12 ? <span>+{items.length - 12}</span> : null}
+        </div>
+        <dl className="detailList compact">
+          <div><dt>場所</dt><dd>{commonValue(folders)}</dd></div>
+          {items[0].kind === "saved" ? <div><dt>評価</dt><dd>{ratingSummary(items)}</dd></div> : <div><dt>商品</dt><dd>{commonValue(products)}</dd></div>}
+          <div><dt>操作</dt><dd>一括ダウンロード、フォルダ移動、削除などは選択状態のまま実行できます。</dd></div>
+        </dl>
+        <div className="detailFileList">
+          {items.map((item) => (
+            <div key={item.url}>
+              <strong>{item.title}</strong>
+              <span>{item.folder} / {item.fileName}</span>
+            </div>
+          ))}
+        </div>
+      </aside>
+    );
+  }
+
+  function openRefineFromVersion(url: string) {
+    setLibSelectedUrl(url);
+    setLibFinalUrl("");
+    setRefineAnnotations([]);
+    setRefineAnnotationDraft(null);
+    setActiveRefineAnnotationId("");
+    setLibRefineOpen(true);
+    setVersionModalUrl("");
+  }
+
+  function renderVersionModal() {
+    const group = versionModalUrl ? findSavedFileGroup(versionModalUrl) : null;
+    if (!group?.versions?.length) return null;
+    const versions = sortSavedVersionsForUi(group.versions);
+    return (
+      <div className="preview-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setVersionModalUrl(""); }}>
+        <div className="versionModal" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="modalHead">
+            <div>
+              <h2>バージョン</h2>
+              <p>オリジナルと仕上げ生成の履歴をまとめて確認できます。</p>
+            </div>
+            <button type="button" onClick={() => setVersionModalUrl("")}>閉じる</button>
+          </div>
+          <div className="versionList">
+            {versions.map((version, index) => {
+              const isCurrentDisplay = version.url === group.url;
+              const parent = parentVersionFor(group, version);
+              const promptText = [version.editInstruction, version.generationPrompt || version.stylePrompt].filter(Boolean).join("\n\n");
+              return (
+                <div className={`versionItem ${isCurrentDisplay ? "active" : ""}`} key={version.url}>
+                  <img
+                    className="versionThumb"
+                    src={version.url}
+                    alt={version.displayName || version.name}
+                    onMouseEnter={(event) => showHoverPreview(event, version.url, version.displayName || version.name)}
+                    onMouseMove={(event) => showHoverPreview(event, version.url, version.displayName || version.name)}
+                    onMouseLeave={() => setHoverPreview(null)}
+                    onFocus={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      showHoverPreview({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as React.MouseEvent, version.url, version.displayName || version.name);
+                    }}
+                    onBlur={() => setHoverPreview(null)}
+                    tabIndex={0}
+                  />
+                  <div className="versionMeta">
+                    <div className="versionTitle">
+                      <strong>{savedVersionLabel(version, versions.length - index)}</strong>
+                      {isCurrentDisplay ? <span>ライブラリ表示中</span> : null}
+                    </div>
+                    <input
+                      className="versionNameInput"
+                      defaultValue={version.displayName || version.name.replace(/\.(png|jpe?g|webp)$/i, "")}
+                      onBlur={(event) => {
+                        const next = event.target.value.trim();
+                        const current = version.displayName || version.name.replace(/\.(png|jpe?g|webp)$/i, "");
+                        if (next && next !== current) void updateLibraryFileMeta(version.url, { displayName: next });
+                      }}
+                    />
+                    <dl>
+                      <div><dt>比率</dt><dd>{version.aspectRatio || "-"}</dd></div>
+                      <div><dt>保存日時</dt><dd>{version.savedAt ? formatShortDate(version.savedAt) : "-"}</dd></div>
+                      {version.parentUrl ? <div><dt>生成元</dt><dd>{renderSourcePreview(version.parentUrl, parent?.displayName || parent?.name || fileNameFromUrl(version.parentUrl))}</dd></div> : null}
+                    </dl>
+                    <div className="versionPrompt">{promptText || "保存された生成指示はありません"}</div>
+                    <div className="versionActions">
+                      <button type="button" disabled={isCurrentDisplay} onClick={() => void setLibraryDisplayVersion(version.url)}>トップに表示</button>
+                      <button type="button" onClick={() => openRefineFromVersion(version.url)}>これを元に再生成</button>
+                      <a href={version.url} download>DL</a>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const libraryDetailItems = selectedLibraryDetails();
 
   return (
     <div className="app">
@@ -1788,7 +2634,7 @@ export default function Home() {
       </aside>
 
       {/* ===== Main content ===== */}
-      <main className="main">
+      <main className={`main ${tab === "generate" ? "generateMain" : ""}`}>
 
       {progress.active && (
         <section className={`progressPanel ${progress.active ? "running" : ""}`}>
@@ -1801,6 +2647,14 @@ export default function Home() {
       {tab === "generate" ? (
         <>
           <div className="main-header"><div><h1>バナー作成</h1></div></div>
+          <div className="historyBar generateHistoryTop">
+            <label>過去の作成結果
+              <select value={selectedHistoryId} onChange={(event) => { if (event.target.value) loadHistoryRecord(event.target.value); else { setSelectedHistoryId(""); } }}>
+                <option value="">過去の結果を読み込む</option>
+                {historyRecords.map((record) => <option value={record.id} key={record.id}>{historyLabel(record)}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="gen-layout">
             {/* Settings panel */}
             <div className="panel gen-settings form">
@@ -1901,30 +2755,7 @@ export default function Home() {
                   </label>
                   <small>基本は1枚ずつ直列生成します。2枚は少しまとめたい時だけ。作成数が多いほど時間がかかります。</small>
                 </div>
-                <div className="controlGrid mt">
-                  <label>モデル
-                    <select value={codexSettings.model} onChange={(event) => setCodexSettings((current) => ({ ...current, model: event.target.value }))}>
-                      <option value="gpt-5.5">gpt-5.5</option>
-                      <option value="gpt-5.4">gpt-5.4</option>
-                      <option value="gpt-5.4-mini">gpt-5.4-mini</option>
-                    </select>
-                  </label>
-                  <label>推論強度
-                    <select value={codexSettings.effort} onChange={(event) => setCodexSettings((current) => ({ ...current, effort: event.target.value as CodexSettings["effort"] }))}>
-                      <option value="low">低</option>
-                      <option value="medium">中（標準）</option>
-                      <option value="high">高</option>
-                      <option value="xhigh">非常に高い</option>
-                    </select>
-                  </label>
-                  <label>速度
-                    <select value={codexSettings.serviceTier} onChange={(event) => setCodexSettings((current) => ({ ...current, serviceTier: event.target.value as CodexSettings["serviceTier"] }))}>
-                      <option value="fast">速い</option>
-                      <option value="auto">通常</option>
-                    </select>
-                  </label>
-                </div>
-                <small className="settingHint">画像生成・仕上げ生成に使うCodex App Serverの設定です。標準は gpt-5.5 / 中 / 通常。</small>
+                <small className="settingHint">モデル・推論強度・速度は左下の「設定」でステップごとに調整できます。</small>
               </details>
 
               {busy ? (
@@ -1935,7 +2766,7 @@ export default function Home() {
             </div>
 
             {/* Right side: candidates + inline library */}
-            <div className="gen-right">
+            <div className="gen-right" style={{ "--gen-library-height": `${genLibraryHeight}px` } as React.CSSProperties}>
               {/* Candidate grid with multi-select */}
               <div className="gen-candidates">
                 {sheetVariants.length ? (
@@ -1992,15 +2823,9 @@ export default function Home() {
                   </>
                 ) : <div className="empty">「バナーを作成する」で候補が表示されます</div>}
 
-                <div className="historyBar mt">
-                  <label>過去の作成結果
-                    <select value={selectedHistoryId} onChange={(event) => { if (event.target.value) loadHistoryRecord(event.target.value); else { setSelectedHistoryId(""); } }}>
-                      <option value="">過去の結果を読み込む</option>
-                      {historyRecords.map((record) => <option value={record.id} key={record.id}>{historyLabel(record)}</option>)}
-                    </select>
-                  </label>
-                </div>
               </div>
+
+              <button className="genSplitHandle" type="button" aria-label="生成画像一覧とライブラリの高さを変更" onPointerDown={startGenerateSplitResize} />
 
               {/* Inline mini library */}
               <div className="gen-library">
@@ -2013,7 +2838,7 @@ export default function Home() {
                       <input value={newSaveFolderName} onChange={(event) => setNewSaveFolderName(event.target.value)} placeholder={selectedSaveFolder ? "配下に作るフォルダ名" : "新規フォルダ名"} />
                       <button type="button" disabled={busy || !newSaveFolderName.trim()} onClick={createSaveFolder}>作成</button>
                     </div>
-                    {renderLibraryAxis()}
+                    {renderLibraryAxis(false)}
                   </div>
                   <button className="folderResizeHandle" type="button" aria-label="フォルダ幅を変更" onPointerDown={startFolderResize} />
                   <div
@@ -2022,8 +2847,7 @@ export default function Home() {
                     onDrop={(event) => dropToSave(event)}
                   >
                     <div className="saveDrop">
-                      <strong>{selectedSaveFolder || "保存済み"}にドロップして保存</strong>
-                      <span>候補を選択してここにドラッグ</span>
+                      <strong>ここへドラッグして保存</strong>
                       {selectedCropUrls.size > 0 && (
                         <button className="saveSelectedButton" type="button" disabled={busy} onClick={() => void saveSelectedCrops()}>
                           選択した{selectedCropUrls.size}枚をここに保存
@@ -2038,12 +2862,21 @@ export default function Home() {
                         </div>
                         <div className="gen-library-files" style={{ "--thumb-size": `${libraryThumbSize}px` } as React.CSSProperties}>
                           {selectedSaveNode()?.files.map((item) => (
-                            <a href={item.url} className="gen-lib-thumb" key={item.path} target="_blank">
+                            <a
+                              href={item.url}
+                              className="gen-lib-thumb"
+                              key={item.path}
+                              target="_blank"
+                              onMouseEnter={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
+                              onMouseMove={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
+                              onMouseLeave={() => setHoverPreview(null)}
+                              onFocus={(event) => {
+                                const rect = event.currentTarget.getBoundingClientRect();
+                                showHoverPreview({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as React.MouseEvent, item.url, libraryCaption(item));
+                              }}
+                              onBlur={() => setHoverPreview(null)}
+                            >
                               <img src={item.url} alt={item.name} />
-                              <span className="gen-lib-preview" aria-hidden="true">
-                                <img src={item.url} alt="" />
-                                {libraryCaption(item) ? <p>{libraryCaption(item)}</p> : null}
-                              </span>
                             </a>
                           ))}
                         </div>
@@ -2052,7 +2885,7 @@ export default function Home() {
                           type="button"
                           onClick={() => { setTab("library"); }}
                         >
-                          {selectedSaveNode()?.files.length}枚を仕上げ・編集する →
+                          このフォルダをライブラリタブで開く →
                         </button>
                       </>
                     ) : null}
@@ -2092,7 +2925,7 @@ export default function Home() {
       ) : tab === "library" ? (
         <>
           <div className="main-header"><div><h1>ライブラリ</h1><p>保存したバナーを整理・仕上げできます</p></div></div>
-          <div className={`lib-layout ${libSelectedUrl ? "" : "no-refine"}`} style={{ "--folder-width": `${libraryFolderWidth}px` } as React.CSSProperties}>
+          <div className={`lib-layout ${libraryDetailCollapsed ? "detail-collapsed" : ""}`} style={{ "--folder-width": `${libraryFolderWidth}px` } as React.CSSProperties}>
             {/* Folder tree */}
             <div className="panel folderPane">
               <div className="sectionHead"><h2>フォルダ</h2></div>
@@ -2105,7 +2938,7 @@ export default function Home() {
             <button className="folderResizeHandle libraryResize" type="button" aria-label="フォルダ幅を変更" onPointerDown={startFolderResize} />
 
             {/* Banner grid */}
-            <div className="panel" onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropToSave(event)}>
+            <div className="panel libraryContentPane" onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropToSave(event)}>
               <div className="sectionHead">
                 <div><h2>{libraryView === "saved" ? selectedSaveFolder || "保存済み" : "未保存"}</h2></div>
                 <div className="headerActions">
@@ -2114,14 +2947,19 @@ export default function Home() {
                     {libraryView === "saved" ? currentLibraryFiles().length : unsavedLibraryFiles().length}枚
                     {libSelectedUrls.size > 0 ? ` / ${libSelectedUrls.size}枚選択中` : ""}
                   </span>
+                  {libraryView === "saved" && libSelectedUrls.size === 1 && <button className="ghostIconButton" type="button" onClick={() => openLibraryRefine()}>仕上げ生成</button>}
                   {libSelectedUrls.size > 0 && <button type="button" onClick={clearLibrarySelection}>選択解除</button>}
                 </div>
               </div>
               {libraryView === "saved" ? (
                 <div className="libraryFilters">
-                  <input value={librarySearch} onChange={(event) => { setLibrarySearch(event.target.value); clearLibrarySelection(); }} placeholder="ファイル名・表示名で検索" />
-                  <select value={libraryRatingFilter} onChange={(event) => { setLibraryRatingFilter(Number(event.target.value)); clearLibrarySelection(); }}>
-                    <option value={0}>評価すべて</option>
+                  <div className="filterSearchBox">
+                    <input value={librarySearch} onChange={(event) => { setLibrarySearch(event.target.value); clearLibrarySelection(); }} placeholder="ファイル名・表示名で検索" />
+                    {librarySearch ? <button type="button" aria-label="検索をクリア" onClick={() => { setLibrarySearch(""); clearLibrarySelection(); }}>×</button> : null}
+                  </div>
+                  <select value={libraryRatingFilter} onChange={(event) => { setLibraryRatingFilter(event.target.value); clearLibrarySelection(); }}>
+                    <option value="all">評価すべて</option>
+                    <option value="unrated">未評価のみ</option>
                     <option value={1}>★1以上</option>
                     <option value={2}>★2以上</option>
                     <option value={3}>★3以上</option>
@@ -2131,7 +2969,10 @@ export default function Home() {
                 </div>
               ) : (
                 <div className="libraryFilters">
-                  <input value={librarySearch} onChange={(event) => { setLibrarySearch(event.target.value); clearLibrarySelection(); }} placeholder="商品名・訴求案で検索" />
+                  <div className="filterSearchBox">
+                    <input value={librarySearch} onChange={(event) => { setLibrarySearch(event.target.value); clearLibrarySelection(); }} placeholder="商品名・訴求案で検索" />
+                    {librarySearch ? <button type="button" aria-label="検索をクリア" onClick={() => { setLibrarySearch(""); clearLibrarySelection(); }}>×</button> : null}
+                  </div>
                   <select value={unsavedHistoryFilter} onChange={(event) => { setUnsavedHistoryFilter(event.target.value); clearLibrarySelection(); }}>
                     <option value="">生成履歴すべて</option>
                     {historyRecords.map((record) => <option value={record.id} key={record.id}>{historyLabel(record)}</option>)}
@@ -2140,36 +2981,42 @@ export default function Home() {
               )}
               <div className="breadcrumb">
                 {(libraryView === "saved" ? saveBreadcrumb() : [{ name: "未保存", path: "__unsaved__" }]).map((item, index) => (
-                  <button type="button" key={item.path || "root"} onClick={() => item.path === "__unsaved__" ? (setLibraryView("unsaved"), clearLibrarySelection()) : selectSavedFolder(item.path)}>{index > 0 ? " / " : ""}{item.name}</button>
+                  <button type="button" key={item.path || "root"} onClick={() => item.path === "__unsaved__" ? selectUnsavedLibrary() : selectSavedFolder(item.path)}>{index > 0 ? " / " : ""}{item.name}</button>
                 ))}
               </div>
-              {libraryView === "saved" && <div className="saveDrop">
-                <strong>ここにドロップして保存</strong>
-                <span>{selectedSaveFolder ? "このフォルダに保存します" : "自動でフォルダを作って保存します"}</span>
-              </div>}
               {libraryView === "saved" && selectedSaveNode()?.children.length ? (
                 <div className="folderSummary">
                   {selectedSaveNode()?.children.map((folder) => (
                     <button type="button" key={folder.path} onClick={() => selectSavedFolder(folder.path)} onDragOver={(event) => event.preventDefault()} onDrop={(event) => dropToSave(event, folder.path)}>
-                      <strong>{folder.name}</strong><span>{countFiles(folder)}枚</span>
+                      <strong>{folder.name}</strong><span>{folderCountLabel(folder)}枚</span>
                     </button>
                   ))}
                 </div>
               ) : null}
               {libraryView === "saved" ? (currentLibraryFiles().length ? (
-                <div className="bannerGrid">
+                <div
+                  className={`bannerGrid selectionSurface ${marqueeSelection.active ? "selecting" : ""}`}
+                  onPointerDown={startLibraryMarquee}
+                  onPointerMove={moveLibraryMarquee}
+                  onPointerUp={endLibraryMarquee}
+                  onPointerCancel={endLibraryMarquee}
+                >
                   {currentLibraryFiles().map((item) => (
                     <div
                       className={`bannerTile ${libSelectedUrls.has(item.url) ? "active" : ""}`}
                       key={item.path}
+                      data-url={item.url}
                       draggable
                       onDragStart={(event) => startLibraryFileDrag(event, item.url)}
                       onClick={(event) => handleLibraryTileClick(event, item.url, currentLibraryFiles().map((file) => file.url))}
-                      onMouseEnter={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
-                      onMouseMove={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
-                      onMouseLeave={() => setHoverPreview(null)}
                     >
-                      <div className="bannerImageWrap">
+                      <div
+                        className="bannerImageWrap"
+                        onDoubleClick={() => openLibraryRefine(item.url)}
+                        onMouseEnter={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
+                        onMouseMove={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
+                        onMouseLeave={() => setHoverPreview(null)}
+                      >
                         <img src={item.url} alt={item.name} />
                         <button
                           className="bannerDelete"
@@ -2193,6 +3040,20 @@ export default function Home() {
                         >
                           ↓
                         </a>
+                        {(item.versionCount || 1) > 1 && (
+                          <button
+                            className="versionBadge"
+                            type="button"
+                            title="バージョンを表示"
+                            aria-label={`${item.versionCount}件のバージョンを表示`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setVersionModalUrl(item.url);
+                            }}
+                          >
+                            {item.versionCount}
+                          </button>
+                        )}
                       </div>
                       {!selectedSaveFolder && item.url.includes("/") ? <small className="folderLabel">{decodeURIComponent(item.url.replace("/saved-banners/", "").split("/").slice(0, -1).join("/")) || "ルート"}</small> : null}
                       <input
@@ -2225,19 +3086,28 @@ export default function Home() {
                   ))}
                 </div>
               ) : <div className="empty">条件に合うバナーがありません</div>) : (unsavedLibraryFiles().length ? (
-                <div className="bannerGrid">
+                <div
+                  className={`bannerGrid selectionSurface ${marqueeSelection.active ? "selecting" : ""}`}
+                  onPointerDown={startLibraryMarquee}
+                  onPointerMove={moveLibraryMarquee}
+                  onPointerUp={endLibraryMarquee}
+                  onPointerCancel={endLibraryMarquee}
+                >
                   {unsavedLibraryFiles().map((item) => (
                     <div
                       className={`bannerTile ${libSelectedUrls.has(item.url) ? "active" : ""}`}
                       key={item.url}
+                      data-url={item.url}
                       draggable
                       onDragStart={(event) => startImageDrag(event, item.url, item.variant, "candidate")}
                       onClick={(event) => handleLibraryTileClick(event, item.url, unsavedLibraryFiles().map((file) => file.url))}
-                      onMouseEnter={(event) => showHoverPreview(event, item.url, [item.variant.appeal, item.variant.prompt].filter(Boolean).join("\n"))}
-                      onMouseMove={(event) => showHoverPreview(event, item.url, [item.variant.appeal, item.variant.prompt].filter(Boolean).join("\n"))}
-                      onMouseLeave={() => setHoverPreview(null)}
                     >
-                      <div className="bannerImageWrap">
+                      <div
+                        className="bannerImageWrap"
+                        onMouseEnter={(event) => showHoverPreview(event, item.url, [item.variant.appeal, item.variant.prompt].filter(Boolean).join("\n"))}
+                        onMouseMove={(event) => showHoverPreview(event, item.url, [item.variant.appeal, item.variant.prompt].filter(Boolean).join("\n"))}
+                        onMouseLeave={() => setHoverPreview(null)}
+                      >
                         <img src={item.url} alt={item.variant.appeal || item.product} />
                         <a
                           className="tileDownload"
@@ -2260,30 +3130,128 @@ export default function Home() {
                 </div>
               ) : <div className="empty">未保存の候補はありません</div>)}
             </div>
-
-            {/* Refine panel */}
-            {libSelectedUrl && (
-              <div className="panel refine-panel form">
-                <div className="sectionHead"><h2>仕上げ</h2><button type="button" onClick={clearLibrarySelection}>✕</button></div>
-                <img className="refine-preview" src={libFinalUrl || libSelectedUrl} alt="selected" />
-                <label>サイズ
-                  <select value={libAspectRatio} onChange={(event) => { setLibAspectRatio(event.target.value); setLibFinalUrl(""); }}>
-                    <option value="1:1">1:1 正方形</option><option value="4:5">4:5 SNS縦</option><option value="9:16">9:16 縦長</option><option value="16:9">16:9 横長</option>
-                  </select>
-                </label>
-                <label>調整メモ（任意）
-                  <textarea value={libEditInstruction} onChange={(event) => setLibEditInstruction(event.target.value)} placeholder="例: 背景を明るく、商品を大きく" />
-                </label>
-                <button className="primary" type="button" disabled={busy} onClick={refineLibraryImage}>{libAspectRatio}で仕上げる</button>
-                {libFinalUrl && (
-                  <>
-                    <button type="button" onClick={() => exportBanner(libFinalUrl, null, "final")}>フォルダへ保存</button>
-                    <a href={libFinalUrl} download style={{display:"block",textAlign:"center",color:"var(--accent)",fontSize:11,marginTop:4}}>ダウンロード</a>
-                  </>
-                )}
-              </div>
-            )}
+            {renderLibraryDetail(libraryDetailItems)}
           </div>
+          {libRefineOpen && libSelectedUrl && libraryView === "saved" && (
+            <div className="preview-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setLibRefineOpen(false); }}>
+              <div className="libraryRefineModal form" onMouseDown={(event) => event.stopPropagation()}>
+                <div className="modalHead">
+                  <div>
+                    <h2>バナーを仕上げる</h2>
+                    <p>選択した画像をもとに、指定比率で単体バナーへ再生成します。</p>
+                  </div>
+                  <button type="button" onClick={() => setLibRefineOpen(false)}>閉じる</button>
+                </div>
+                <div className="libraryRefineBody">
+                  <div className="refineAnnotator">
+                    <div className="refineCanvas">
+                      <img className="refine-preview" src={libFinalUrl || libSelectedUrl} alt="selected" />
+                      {!libFinalUrl && (
+                        <div
+                          className={`refineAnnotationLayer tool-${refineAnnotationTool}`}
+                          onPointerDown={startRefineAnnotation}
+                          onPointerMove={moveRefineAnnotation}
+                          onPointerUp={finishRefineAnnotation}
+                          onPointerCancel={() => setRefineAnnotationDraft(null)}
+                        >
+                          {refineAnnotations.map((mark, index) => (
+                            mark.kind === "box" ? (
+                              <span
+                                className={`refineMark refineBox ${activeRefineAnnotationId === mark.id ? "active" : ""}`}
+                                key={mark.id}
+                                style={{
+                                  left: `${mark.x * 100}%`,
+                                  top: `${mark.y * 100}%`,
+                                  width: `${(mark.width || 0) * 100}%`,
+                                  height: `${(mark.height || 0) * 100}%`,
+                                }}
+                              >
+                                <b>{index + 1}</b>
+                              </span>
+                            ) : (
+                              <span
+                                className={`refineMark refinePin ${activeRefineAnnotationId === mark.id ? "active" : ""}`}
+                                key={mark.id}
+                                style={{ left: `${mark.x * 100}%`, top: `${mark.y * 100}%` }}
+                              >
+                                {index + 1}
+                              </span>
+                            )
+                          ))}
+                          {refineAnnotationDraft && (
+                            <span
+                              className="refineMark refineBox drafting"
+                              style={{
+                                left: `${refineAnnotationDraft.x * 100}%`,
+                                top: `${refineAnnotationDraft.y * 100}%`,
+                                width: `${refineAnnotationDraft.width * 100}%`,
+                                height: `${refineAnnotationDraft.height * 100}%`,
+                              }}
+                            />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <p className="annotationHint">{libFinalUrl ? "生成済み画像です。再度メモする場合はこのバージョンから仕上げ生成を開いてください。" : "必要な時だけ、画像上に修正メモを置けます。赤い番号や枠は生成結果には入れません。"}</p>
+                  </div>
+                  <div className="libraryRefineControls">
+                    <div className="annotationPanel">
+                      <div className="annotationPanelHead">
+                        <div>
+                          <strong>修正メモ</strong>
+                          <span>任意</span>
+                        </div>
+                        {refineAnnotations.length > 0 && <button type="button" onClick={() => { setRefineAnnotations([]); setActiveRefineAnnotationId(""); }}>クリア</button>}
+                      </div>
+                      <div className="annotationTools">
+                        <button type="button" className={refineAnnotationTool === "pin" ? "active" : ""} onClick={() => setRefineAnnotationTool("pin")} disabled={Boolean(libFinalUrl)}>ピン</button>
+                        <button type="button" className={refineAnnotationTool === "box" ? "active" : ""} onClick={() => setRefineAnnotationTool("box")} disabled={Boolean(libFinalUrl)}>範囲</button>
+                      </div>
+                      <p>{refineAnnotationTool === "pin" ? "画像をクリックして、直したい場所に番号を置きます。" : "画像をドラッグして、直したい範囲を囲みます。"}</p>
+                      {refineAnnotations.length ? (
+                        <div className="annotationList">
+                          {refineAnnotations.map((mark, index) => (
+                            <div className={`annotationItem ${activeRefineAnnotationId === mark.id ? "active" : ""}`} key={mark.id}>
+                              <button className="annotationNumber" type="button" onClick={() => setActiveRefineAnnotationId(mark.id)}>{index + 1}</button>
+                              <input
+                                value={mark.text}
+                                onFocus={() => setActiveRefineAnnotationId(mark.id)}
+                                onChange={(event) => updateRefineAnnotation(mark.id, event.target.value)}
+                                placeholder={mark.kind === "box" ? "例: この範囲の文字を大きく" : "例: ここに価格を移動"}
+                              />
+                              <button className="annotationRemove" type="button" onClick={() => removeRefineAnnotation(mark.id)} aria-label={`${index + 1}を削除`}>×</button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="annotationEmpty">メモなしでも生成できます。</div>
+                      )}
+                    </div>
+                    <label>サイズ
+                      <select value={libAspectRatio} onChange={(event) => { setLibAspectRatio(event.target.value); setLibFinalUrl(""); }}>
+                        {imageAspectOptions.map((option) => (
+                          <option value={option.value} key={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>調整メモ（任意）
+                      <textarea value={libEditInstruction} onChange={(event) => setLibEditInstruction(event.target.value)} placeholder="例: 背景を明るく、商品を大きく" />
+                    </label>
+                    <button className="primary" type="button" disabled={libraryRefineBusy} onClick={refineLibraryImage}>
+                      {libraryRefineBusy ? "仕上げ生成中…" : `${libAspectRatio}で仕上げ生成`}
+                    </button>
+                    {libFinalUrl && (
+                      <>
+                        <div className="savedNotice">新しいバージョンとして保存済み</div>
+                        <a href={libFinalUrl} download style={{display:"block",textAlign:"center",color:"var(--accent)",fontSize:11,marginTop:4}}>ダウンロード</a>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {renderVersionModal()}
           {hoverPreview && (
             <div
               className={`floatingHoverPreview ${hoverPreview.placement}`}
@@ -2294,6 +3262,18 @@ export default function Home() {
               {hoverPreview.caption ? <p>{hoverPreview.caption}</p> : null}
             </div>
           )}
+          {marqueeSelection.active && (
+            <div
+              className="marqueeSelectionBox"
+              style={{
+                left: Math.min(marqueeSelection.startX, marqueeSelection.currentX),
+                top: Math.min(marqueeSelection.startY, marqueeSelection.currentY),
+                width: Math.abs(marqueeSelection.currentX - marqueeSelection.startX),
+                height: Math.abs(marqueeSelection.currentY - marqueeSelection.startY),
+              } as React.CSSProperties}
+              aria-hidden="true"
+            />
+          )}
         </>
 
       ) : tab === "settings" ? (
@@ -2301,99 +3281,140 @@ export default function Home() {
           <div className="main-header">
             <div>
               <h1>設定</h1>
-              <p>生成ステップごとのプロンプトプリセットを管理します</p>
+              <p>生成ステップごとのプロンプトとCodex設定を管理します</p>
             </div>
           </div>
-          <section className="settingsLayout">
+          <section className="settingsLayout compact">
             <div className="panel promptPresetList">
-              <div className="sectionHead"><h2>使用するプリセット</h2></div>
-              {(Object.keys(promptStepLabels) as PromptStep[]).map((step) => (
-                <div className="promptStepCard" key={step}>
-                  <div className="promptStepHead">
-                    <strong>{promptStepLabels[step]}</strong>
-                    <span>{promptPresetsFor(step).find((preset) => preset.id === selectedPromptPresetIds[step])?.name || "デフォルト"}</span>
-                  </div>
-                  <select value={selectedPromptPresetIds[step]} onChange={(event) => choosePromptPreset(step, event.target.value)}>
-                    {promptPresetsFor(step).map((preset) => <option value={preset.id} key={preset.id}>{preset.name}{preset.builtIn ? "（固定）" : ""}</option>)}
-                  </select>
-                  <div className="promptPresetButtons">
-                    {promptPresetsFor(step).map((preset) => (
-                      <div className={`promptPresetRow ${selectedPromptPresetIds[step] === preset.id ? "active" : ""}`} key={preset.id}>
-                        <button type="button" onClick={() => choosePromptPreset(step, preset.id)}>{preset.name}</button>
-                        {preset.builtIn ? <span>固定</span> : <button type="button" onClick={() => editPromptPreset(preset)}>編集</button>}
-                        <button type="button" onClick={() => editPromptPreset(preset, true)}>コピー</button>
-                        {!preset.builtIn && <button className="dangerText" type="button" onClick={() => deletePromptPreset(preset)}>削除</button>}
+              <div className="sectionHead">
+                <h2>ステップ別設定</h2>
+                <span className="mutedText">プロンプトはプリセットから選択し、編集はポップアップで行います。</span>
+              </div>
+              {(Object.keys(promptStepLabels) as PromptStep[]).map((step) => {
+                const currentPreset = selectedPromptPreset(step);
+                return (
+                  <div className="promptStepCard compact" key={step}>
+                    <div className="promptStepHead">
+                      <div>
+                        <strong>{promptStepLabels[step]}</strong>
+                        <p>{currentPreset?.builtIn ? "デフォルトプリセット" : "カスタムプリセット"}</p>
                       </div>
+                      <span>{currentPreset?.name || "未選択"}</span>
+                    </div>
+                    <div className="promptPresetSelectRow">
+                      <label>プロンプト
+                        <select value={selectedPromptPresetIds[step]} onChange={(event) => choosePromptPreset(step, event.target.value)}>
+                          {promptPresetsFor(step).map((preset) => <option value={preset.id} key={preset.id}>{preset.name}{preset.builtIn ? "（デフォルト）" : ""}</option>)}
+                        </select>
+                      </label>
+                      <div className="promptActionBar">
+                        <button type="button" onClick={() => openPromptPresetEditor(step, "create")}>追加</button>
+                        <button type="button" disabled={!currentPreset} onClick={() => currentPreset && openPromptPresetEditor(step, "edit", currentPreset)}>編集</button>
+                        <button type="button" disabled={!currentPreset} onClick={() => currentPreset && openPromptPresetEditor(step, "copy", currentPreset)}>コピー</button>
+                        {currentPreset && !currentPreset.builtIn ? <button className="dangerText" type="button" onClick={() => deletePromptPreset(currentPreset)}>削除</button> : null}
+                      </div>
+                    </div>
+                    <div className="stepModelSettings">
+                      <label>モデル
+                        <select value={stepCodexSettings[step].model} onChange={(event) => updateStepCodexSettings(step, { model: event.target.value })}>
+                          <option value="gpt-5.5">gpt-5.5</option>
+                          <option value="gpt-5.4">gpt-5.4</option>
+                          <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+                        </select>
+                      </label>
+                      <label>推論強度
+                        <select value={stepCodexSettings[step].effort} onChange={(event) => updateStepCodexSettings(step, { effort: event.target.value as CodexSettings["effort"] })}>
+                          <option value="low">低</option>
+                          <option value="medium">中（標準）</option>
+                          <option value="high">高</option>
+                          <option value="xhigh">非常に高い</option>
+                        </select>
+                      </label>
+                      <label>速度
+                        <select value={stepCodexSettings[step].serviceTier} onChange={(event) => updateStepCodexSettings(step, { serviceTier: event.target.value as CodexSettings["serviceTier"] })}>
+                          <option value="auto">通常</option>
+                          <option value="fast">速い</option>
+                        </select>
+                      </label>
+                    </div>
+                    <small className="stepSettingHint">このステップのCodexリクエストだけに適用します。分割や商品情報など必須条件は実行時に固定で追加されます。</small>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {promptEditorOpen && (
+            <div className="preview-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) closePromptPresetEditor(); }}>
+              <div className="promptEditorModal form" onMouseDown={(event) => event.stopPropagation()}>
+                <div className="modalHead">
+                  <div>
+                    <h2>{promptDraftId ? "プロンプト編集" : "プロンプト追加"}</h2>
+                    <p>{promptStepLabels[promptDraftStep]} のプリセットを調整します</p>
+                  </div>
+                  <button type="button" onClick={closePromptPresetEditor}>閉じる</button>
+                </div>
+                <div className="controlGrid">
+                  <label>ステップ
+                    <select value={promptDraftStep} onChange={(event) => {
+                      const step = event.target.value as PromptStep;
+                      const base = selectedPromptPreset(step) || promptPresetsFor(step)[0];
+                      setPromptDraftStep(step);
+                      setPromptDraftId("");
+                      setPromptDraftName(base ? `${base.name}のコピー` : "");
+                      setPromptDraftTemplate(base?.template || "");
+                    }}>
+                      {(Object.keys(promptStepLabels) as PromptStep[]).map((step) => <option value={step} key={step}>{promptStepLabels[step]}</option>)}
+                    </select>
+                  </label>
+                  <label>プリセット名
+                    <input value={promptDraftName} onChange={(event) => setPromptDraftName(event.target.value)} placeholder="例: 攻めた美容バナー用" />
+                  </label>
+                </div>
+
+                <div className="variablePanel">
+                  <div>
+                    <strong>変数</strong>
+                    <p>クリックするとプロンプト末尾に挿入します。破綻防止の必須条件は固定ルールとして自動で追加されます。</p>
+                  </div>
+                  <div className="variableChips">
+                    {promptVariableHelp[promptDraftStep].map((item) => (
+                      <button type="button" key={item.key} title={item.description} onClick={() => insertPromptVariable(item.key)}>
+                        {`{{${item.key}}}`}{item.required ? <b>固定</b> : null}
+                      </button>
                     ))}
                   </div>
                 </div>
-              ))}
-            </div>
 
-            <div className="panel promptEditor form">
-              <div className="sectionHead">
-                <h2>{promptDraftId ? "プリセット編集" : "プリセット作成"}</h2>
-                <button type="button" onClick={() => {
-                  const base = promptPresetsFor(promptDraftStep)[0];
-                  if (base) editPromptPreset(base, true);
-                }}>デフォルトから作成</button>
-              </div>
-              <div className="controlGrid">
-                <label>ステップ
-                  <select value={promptDraftStep} onChange={(event) => {
-                    const step = event.target.value as PromptStep;
-                    setPromptDraftStep(step);
-                    const base = promptPresetsFor(step)[0];
-                    setPromptDraftId("");
-                    setPromptDraftName(base ? `${base.name}のコピー` : "");
-                    setPromptDraftTemplate(base?.template || "");
-                  }}>
-                    {(Object.keys(promptStepLabels) as PromptStep[]).map((step) => <option value={step} key={step}>{promptStepLabels[step]}</option>)}
-                  </select>
+                <div className="fixedGuardrailPanel">
+                  <strong>固定で必ず入る条件</strong>
+                  <div>
+                    {fixedPromptGuardrailSummary[promptDraftStep].map((item) => <span key={item}>{item}</span>)}
+                  </div>
+                  <p>カスタム本文を短くしても、実行時にこのステップの最低限のルールを末尾へ自動追加します。</p>
+                </div>
+
+                <label>プロンプトテンプレート
+                  <textarea className="promptTextarea" value={promptDraftTemplate} onChange={(event) => setPromptDraftTemplate(event.target.value)} placeholder="デフォルトをコピーして編集してください" />
                 </label>
-                <label>プリセット名
-                  <input value={promptDraftName} onChange={(event) => setPromptDraftName(event.target.value)} placeholder="例: 攻めた美容バナー用" />
-                </label>
-              </div>
 
-              <div className="variablePanel">
-                <div>
-                  <strong>変数</strong>
-                  <p>クリックするとプロンプト末尾に挿入します。必須変数がないと保存できません。</p>
+                {promptMissingVariables(promptDraftStep).length ? (
+                  <div className="promptValidation error">
+                    不足している必須変数: {promptMissingVariables(promptDraftStep).map((key) => `{{${key}}}`).join(", ")}
+                  </div>
+                ) : (
+                  <div className="promptValidation ok">固定ルール込みで必須条件は入ります</div>
+                )}
+
+                <div className="buttonRow">
+                  <button type="button" onClick={closePromptPresetEditor}>キャンセル</button>
+                  <button className="primary" type="button" disabled={busy || !!promptMissingVariables(promptDraftStep).length || !promptDraftName.trim() || !promptDraftTemplate.trim()} onClick={savePromptPreset}>
+                    保存
+                  </button>
                 </div>
-                <div className="variableChips">
-                  {promptVariableHelp[promptDraftStep].map((item) => (
-                    <button type="button" key={item.key} title={item.description} onClick={() => insertPromptVariable(item.key)}>
-                      {`{{${item.key}}}`}{item.required ? <b>必須</b> : null}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <label>プロンプトテンプレート
-                <textarea className="promptTextarea" value={promptDraftTemplate} onChange={(event) => setPromptDraftTemplate(event.target.value)} placeholder="デフォルトをコピーして編集してください" />
-              </label>
-
-              {promptMissingVariables(promptDraftStep).length ? (
-                <div className="promptValidation error">
-                  不足している必須変数: {promptMissingVariables(promptDraftStep).map((key) => `{{${key}}}`).join(", ")}
-                </div>
-              ) : (
-                <div className="promptValidation ok">必須変数は入っています</div>
-              )}
-
-              <div className="buttonRow">
-                <button type="button" onClick={() => {
-                  setPromptDraftId("");
-                  setPromptDraftName("");
-                  setPromptDraftTemplate("");
-                }}>クリア</button>
-                <button className="primary" type="button" disabled={busy || !!promptMissingVariables(promptDraftStep).length || !promptDraftName.trim() || !promptDraftTemplate.trim()} onClick={savePromptPreset}>
-                  保存
-                </button>
               </div>
             </div>
-          </section>
+          )}
         </>
 
       ) : (
@@ -2429,10 +3450,9 @@ export default function Home() {
               <div className="sectionHead">
                 <h2>{editingProductId ? "商品を編集" : "新しい商品を追加"}</h2>
                 {editingProductId && (
-                  <div style={{display:"flex",gap:6}}>
-                    <button type="button" onClick={() => { selectProductForGeneration(editingProductId); setTab("generate"); }}>バナーを作る</button>
-                    <button type="button" onClick={resetProductForm}>新規追加に戻る</button>
-                  </div>
+                  <button className="createBannerButton" type="button" onClick={() => { selectProductForGeneration(editingProductId); setTab("generate"); }}>
+                    この商品のバナーを作る
+                  </button>
                 )}
               </div>
               <div className="brandSelectRow">
