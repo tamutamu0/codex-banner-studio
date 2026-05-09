@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+
+# Next.js / build outputs
+.next/
+out/
+
+# local env
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# local protocol/debug scratch
+tmp-protocol/
+
+# generated images and local app data
+public/generated/*
+public/saved-banners/*
+public/master-images/*
+public/products/*
+public/data/products.json
+public/data/request-log.jsonl
+public/data/startup-log.txt
+
+# keep empty runtime directories in git
+!public/generated/.gitkeep
+!public/saved-banners/.gitkeep
+!public/master-images/.gitkeep
+!public/products/.gitkeep
+!public/data/.gitkeep
