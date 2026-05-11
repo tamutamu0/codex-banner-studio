@@ -135,6 +135,11 @@ type PromptPreset = {
   createdAt: string;
   updatedAt: string;
 };
+type IdeaGenerationSettings = {
+  chunkSize: number;
+  themeMode: "balanced" | "wide";
+  overlapAvoidance: "normal" | "strong";
+};
 type HistoryRecord = {
   id: string;
   createdAt: string;
@@ -147,6 +152,9 @@ type HistoryRecord = {
     divisions?: number;
     sheetRuns?: number;
     imagesPerRequest?: number;
+    ideaChunkSize?: number;
+    ideaThemeMode?: IdeaGenerationSettings["themeMode"];
+    ideaOverlapAvoidance?: IdeaGenerationSettings["overlapAvoidance"];
   };
   ideas: Variant[];
   sheetUrl?: string;
@@ -168,6 +176,10 @@ const promptStepLabels: Record<PromptStep, string> = {
 const promptVariableHelp: Record<PromptStep, Array<{ key: string; label: string; description: string; required?: boolean }>> = {
   ideas: [
     { key: "count", label: "案数", description: "作成する訴求案の数", required: true },
+    { key: "totalCount", label: "総案数", description: "全体で作成する候補数" },
+    { key: "chunkContext", label: "分割文脈", description: "何回目の案生成か、全体のどこを担当するか" },
+    { key: "themeDirective", label: "担当テーマ", description: "このチャンクで散らす訴求・見た目の方向性" },
+    { key: "previousIdeasSummary", label: "既出案", description: "前チャンクまでの案要約。重複回避に使う" },
     { key: "priceInfo", label: "価格情報", description: "生成画面の価格文言" },
     { key: "priceMode", label: "価格モード", description: "all / mixed / none" },
     { key: "productInputJson", label: "商品入力JSON", description: "商品名、画像説明、メモなど", required: true },
@@ -201,11 +213,22 @@ const fixedPromptVariableCoverage: Record<PromptStep, string[]> = {
   final: ["aspectRatio", "editBlock", "brandName", "productName", "priceInfo", "priceTreatmentText", "productImageDescriptions"],
 };
 const fixedPromptGuardrailSummary: Record<PromptStep, string[]> = {
-  ideas: ["JSONだけで返す", "指定数ぴったり案を返す", "商品情報と矛盾する案を出さない"],
+  ideas: ["JSONだけで返す", "指定数ぴったり案を返す", "商品情報と矛盾する案を出さない", "大量生成時はチャンクごとの担当テーマと既出案を使う"],
   sheets: ["指定枚数のPNGを作る", "出力PNGは必ず1:1正方形", "指定分割の均等グリッドにする", "案リスト・商品画像説明・価格方針を必ず使う"],
   final: ["選択画像ベースで仕上げる", "指定比率で再生成する", "指定外の構図・訴求・価格表示を変えない"],
 };
 const DEFAULT_CODEX_SETTINGS: CodexSettings = { model: "gpt-5.5", effort: "medium", serviceTier: "auto" };
+const DEFAULT_IDEA_GENERATION_SETTINGS: IdeaGenerationSettings = { chunkSize: 20, themeMode: "balanced", overlapAvoidance: "strong" };
+const IDEA_CHUNK_THEMES = [
+  "直球の王道訴求、商品特徴、価格オファー、悩み解決。広告として分かりやすい勝ち筋を中心にする。",
+  "テクスチャー、成分感、マクロ質感、商品画像の見た目フック。商品と無関係な成分・カテゴリは足さない。",
+  "漫画、ツッコミ、ミーム、違和感コピー。笑えるが商品特徴から外れない表現にする。",
+  "TV紹介風、新聞・雑誌風、話題化・比較・ランキング風。ただし実在メディア掲載の断定はしない。",
+  "高級感、ブランド感、大人の美容広告、綺麗な人物モデルを一部混ぜる。人物だらけにはしない。",
+  "使用シーン、生活導線、Before/After風、悩みのある瞬間。ただし効果の断定や過剰表現は避ける。",
+  "競合広告の中で埋もれない強いビジュアルフック、誤認ネタ、意外な見立て。商品事実に接地する。",
+  "自由枠。前のチャンクと違う別角度で、モデル自身に大胆な勝ちバナー案を考えさせる。",
+];
 const imageAspectOptions = [
   { value: "1024x1024", label: "1:1 正方形" },
   { value: "1536x1024", label: "3:2 横長" },
@@ -233,6 +256,14 @@ function normalizeCodexSettings(value?: Partial<CodexSettings>): CodexSettings {
     model: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"].includes(model) ? model : DEFAULT_CODEX_SETTINGS.model,
     effort: value?.effort && effortOptions.includes(value.effort) ? value.effort : DEFAULT_CODEX_SETTINGS.effort,
     serviceTier: value?.serviceTier && serviceTierOptions.includes(value.serviceTier) ? value.serviceTier : DEFAULT_CODEX_SETTINGS.serviceTier,
+  };
+}
+function normalizeIdeaGenerationSettings(value?: Partial<IdeaGenerationSettings>): IdeaGenerationSettings {
+  const chunkSize = Math.min(40, Math.max(4, Math.round(Number(value?.chunkSize) || DEFAULT_IDEA_GENERATION_SETTINGS.chunkSize)));
+  return {
+    chunkSize,
+    themeMode: value?.themeMode === "wide" ? "wide" : DEFAULT_IDEA_GENERATION_SETTINGS.themeMode,
+    overlapAvoidance: value?.overlapAvoidance === "normal" ? "normal" : DEFAULT_IDEA_GENERATION_SETTINGS.overlapAvoidance,
   };
 }
 type ProgressState = {
@@ -282,19 +313,25 @@ type MarqueeSelectionState = {
 };
 
 const bannerPresets: BannerPreset[] = [
-  { count: 1, divisions: 1, sheetRuns: 1 },
   { count: 4, divisions: 4, sheetRuns: 1 },
   { count: 8, divisions: 4, sheetRuns: 2 },
-  { count: 9, divisions: 9, sheetRuns: 1 },
   { count: 12, divisions: 4, sheetRuns: 3 },
   { count: 16, divisions: 4, sheetRuns: 4 },
   { count: 20, divisions: 4, sheetRuns: 5 },
   { count: 24, divisions: 4, sheetRuns: 6 },
+  { count: 32, divisions: 4, sheetRuns: 8 },
   { count: 36, divisions: 4, sheetRuns: 9 },
+  { count: 40, divisions: 4, sheetRuns: 10 },
   { count: 48, divisions: 4, sheetRuns: 12 },
   { count: 60, divisions: 4, sheetRuns: 15 },
+  { count: 80, divisions: 4, sheetRuns: 20 },
   { count: 100, divisions: 4, sheetRuns: 25 },
+  { count: 200, divisions: 4, sheetRuns: 50 },
+  { count: 300, divisions: 4, sheetRuns: 75 },
 ];
+
+const HISTORY_UPDATE_SHEET_INTERVAL = 5;
+const LOG_VARIANT_DETAIL_LIMIT = 24;
 
 async function postJson<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, {
@@ -321,6 +358,30 @@ function formatDebug(debug?: ApiDebug) {
   if (debug.revisedPrompt) parts.push(`revised=${debug.revisedPrompt.slice(0, 240)}`);
   if (debug.fallbackReason) parts.push(`fallback=${debug.fallbackReason}`);
   return parts.join(" / ");
+}
+
+function formatVariantsForLog(variants: Variant[]) {
+  const visible = variants.slice(0, LOG_VARIANT_DETAIL_LIMIT);
+  const lines = visible.map((variant) => `${variant.globalIndex || variant.index}. ${variant.appeal || ""} / ${variant.prompt}`);
+  if (variants.length > visible.length) lines.push(`...ほか${variants.length - visible.length}案`);
+  return lines.join("\n");
+}
+
+function previousIdeasSummary(variants: Variant[], max = 28) {
+  if (!variants.length) return "なし";
+  const recent = variants.slice(-max);
+  const lines = recent.map((variant) => `${variant.globalIndex || variant.index}. ${variant.appeal || ""} / ${variant.prompt}`.slice(0, 220));
+  if (variants.length > recent.length) lines.unshift(`既出案は合計${variants.length}件。以下は直近${recent.length}件の要約。`);
+  return lines.join("\n");
+}
+
+function ideaChunkTheme(chunkIndex: number, chunkCount: number, settings: IdeaGenerationSettings) {
+  if (chunkCount <= 1) return "全体バランスを見て、王道・変化球・テイスト主導・商品特徴主導を混ぜる。";
+  const base = IDEA_CHUNK_THEMES[(chunkIndex - 1) % IDEA_CHUNK_THEMES.length];
+  const spread = settings.themeMode === "wide"
+    ? "このチャンクでは前後のチャンクと見た目の系統を大きく変え、広告表現の幅を最大化する。"
+    : "このチャンクでは品質と実用性を保ちながら、前後のチャンクと訴求・見た目が被らないようにする。";
+  return `チャンク${chunkIndex}/${chunkCount}の担当テーマ: ${base}\n${spread}`;
 }
 
 function rateLimitLabel(windowDurationMins?: number) {
@@ -350,6 +411,14 @@ function toRateWindow(window: any): RateLimitWindow | undefined {
     usedPercent: Math.max(0, Math.min(100, Math.round(window.usedPercent))),
     resetsAt: typeof window.resetsAt === "number" ? window.resetsAt : undefined,
   };
+}
+
+function makeClientId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
 
   function parentFolderOf(folder: string) {
@@ -415,6 +484,7 @@ export default function Home() {
   const [libraryThumbSize, setLibraryThumbSize] = useState(72);
   const [genLibraryHeight, setGenLibraryHeight] = useState(300);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
+  const [orphanHistoryRecords, setOrphanHistoryRecords] = useState<HistoryRecord[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState("");
   const [direction, setDirection] = useState("");
   const [priceInfo, setPriceInfo] = useState("");
@@ -432,6 +502,7 @@ export default function Home() {
   const [sheetRuns, setSheetRuns] = useState(2);
   const [imagesPerRequest, setImagesPerRequest] = useState(1);
   const [stepCodexSettings, setStepCodexSettings] = useState<Record<PromptStep, CodexSettings>>(defaultStepCodexSettings);
+  const [ideaGenerationSettings, setIdeaGenerationSettings] = useState<IdeaGenerationSettings>(DEFAULT_IDEA_GENERATION_SETTINGS);
   const [promptPresets, setPromptPresets] = useState<PromptPreset[]>([]);
   const [selectedPromptPresetIds, setSelectedPromptPresetIds] = useState<Record<PromptStep, string>>({ ideas: "default-ideas", sheets: "default-sheets", final: "default-final" });
   const [promptDraftStep, setPromptDraftStep] = useState<PromptStep>("ideas");
@@ -499,7 +570,7 @@ export default function Home() {
     };
   }, [promptPresets, selectedPromptPresetIds]);
 
-  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); void loadPromptPresets(); loadStepCodexSettings(); }, []);
+  useEffect(() => { void loadBrands(); void loadProducts(); void loadSaveTree(); void loadHistory(true); void loadPromptPresets(); loadStepCodexSettings(); loadIdeaGenerationSettings(); }, []);
 
   useEffect(() => {
     void loadRateLimitInfo();
@@ -607,6 +678,25 @@ export default function Home() {
     setStepCodexSettings((current) => {
       const next = { ...current, [step]: { ...current[step], ...patch } };
       if (typeof window !== "undefined") window.localStorage.setItem("stepCodexSettings", JSON.stringify(next));
+      return next;
+    });
+  }
+
+  function loadIdeaGenerationSettings() {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem("ideaGenerationSettings");
+    if (!stored) return;
+    try {
+      setIdeaGenerationSettings(normalizeIdeaGenerationSettings(JSON.parse(stored) as Partial<IdeaGenerationSettings>));
+    } catch {
+      window.localStorage.removeItem("ideaGenerationSettings");
+    }
+  }
+
+  function updateIdeaGenerationSettings(patch: Partial<IdeaGenerationSettings>) {
+    setIdeaGenerationSettings((current) => {
+      const next = normalizeIdeaGenerationSettings({ ...current, ...patch });
+      if (typeof window !== "undefined") window.localStorage.setItem("ideaGenerationSettings", JSON.stringify(next));
       return next;
     });
   }
@@ -814,8 +904,9 @@ export default function Home() {
 
   async function loadHistory(autoRestore = false) {
     const response = await fetch("/api/history");
-    const data = (await response.json()) as { history: HistoryRecord[] };
+    const data = (await response.json()) as { history: HistoryRecord[]; orphanHistory?: HistoryRecord[] };
     setHistoryRecords(data.history || []);
+    setOrphanHistoryRecords(data.orphanHistory || []);
     if (autoRestore && !historyAutoRestoredRef.current && data.history?.length) {
       historyAutoRestoredRef.current = true;
       const lastId = typeof window !== "undefined" ? window.localStorage.getItem("lastGenerationHistoryId") : "";
@@ -935,6 +1026,13 @@ export default function Home() {
     if (settings?.divisions) setDivisions(settings.divisions);
     if (settings?.sheetRuns) setSheetRuns(settings.sheetRuns);
     if (settings?.imagesPerRequest) setImagesPerRequest(settings.imagesPerRequest);
+    if (settings?.ideaChunkSize || settings?.ideaThemeMode || settings?.ideaOverlapAvoidance) {
+      setIdeaGenerationSettings(normalizeIdeaGenerationSettings({
+        chunkSize: settings.ideaChunkSize,
+        themeMode: settings.ideaThemeMode,
+        overlapAvoidance: settings.ideaOverlapAvoidance,
+      }));
+    }
     if (typeof window !== "undefined") window.localStorage.setItem("lastGenerationHistoryId", record.id);
     setStatus(silent ? `${historyLabel(record)} を復元しました` : `${historyLabel(record)} を再表示しました`);
     addLog({
@@ -953,8 +1051,9 @@ export default function Home() {
     applyHistoryRecord(record);
   }
 
-  async function saveGenerationHistory(input: ProductInput, variants: Variant[], urls: string[]) {
+  async function saveGenerationHistory(input: ProductInput, variants: Variant[], urls: string[], recordId?: string) {
     const result = await postJson<{ record: HistoryRecord; history: HistoryRecord[] }>("/api/save", {
+      id: recordId,
       input,
       generationSettings: {
         productId: input.productId,
@@ -964,6 +1063,9 @@ export default function Home() {
         divisions,
         sheetRuns,
         imagesPerRequest,
+        ideaChunkSize: ideaGenerationSettings.chunkSize,
+        ideaThemeMode: ideaGenerationSettings.themeMode,
+        ideaOverlapAvoidance: ideaGenerationSettings.overlapAvoidance,
       },
       ideas: variants,
       sheetUrl: urls[0],
@@ -1171,8 +1273,16 @@ export default function Home() {
     const requestImageCount = Math.min(2, Math.max(1, imagesPerRequest));
     const plannedRequests = Math.ceil(plannedSheets / requestImageCount);
     const requestModeLabel = `${divisions}分割シートを${requestImageCount}枚ずつ直列生成`;
+    const ideaChunkSize = Math.min(targetCount, ideaGenerationSettings.chunkSize);
+    const ideaChunkCount = Math.ceil(targetCount / ideaChunkSize);
+    const totalProgressSteps = ideaChunkCount + plannedSheets;
+    const historyId = makeClientId("project");
+    type SheetResponse = { sheetUrl: string; variants: Variant[]; mode: Mode; debug?: ApiDebug; runIndex: number };
+    const generatedSheetUrls: string[] = [];
+    const generatedVariants: Variant[] = [];
+    let lastHistorySaveSheetCount = 0;
     setStatus(`${targetCount}パターンを作成中…`);
-    startProgress("バナー作成中", "デザイン案を準備しています", 1 + plannedSheets);
+    startProgress("バナー作成中", `訴求案を分割生成しています… 0/${ideaChunkCount}`, totalProgressSteps);
     addLog({
       level: "info",
       title: "バナー作成開始",
@@ -1180,16 +1290,53 @@ export default function Home() {
 Step1=${stepCodexSettings.ideas.model} / ${stepCodexSettings.ideas.effort} / ${stepCodexSettings.ideas.serviceTier}
 Step2=${stepCodexSettings.sheets.model} / ${stepCodexSettings.sheets.effort} / ${stepCodexSettings.sheets.serviceTier}
 Step3=${stepCodexSettings.final.model} / ${stepCodexSettings.final.effort} / ${stepCodexSettings.final.serviceTier}
+Step1分割=${ideaChunkSize}案ずつ × ${ideaChunkCount}回 / ${ideaGenerationSettings.themeMode} / ${ideaGenerationSettings.overlapAvoidance}
 ${requestModeLabel}`,
     });
     try {
-      const ideaResult = await postJson<{ variants: Variant[]; mode: Mode; debug?: ApiDebug }>("/api/ideas", { ...productInput, count: targetCount, divisions: chunkDivision, sheetRuns: plannedSheets, cancelKey, codexSettings: stepCodexSettings.ideas, promptTemplates: activePromptTemplates }, activeAbortRef.current?.signal);
-      if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
-      updateProgress({ current: 1, detail: `画像を生成しています… 0/${plannedSheets}シート` });
-      addLog({ level: "success", title: `訴求案生成完了: ${ideaResult.mode}`, detail: `${formatDebug(ideaResult.debug)}\n案数=${ideaResult.variants.length}\n${ideaResult.variants.map((variant) => `${variant.index}. ${variant.appeal || ""} / ${variant.prompt}`).join("\n")}` });
-      type SheetResponse = { sheetUrl: string; variants: Variant[]; mode: Mode; debug?: ApiDebug; runIndex: number };
+      const ideaVariants: Variant[] = [];
+      let ideaMode: Mode = "codex";
+      let ideaOffset = 0;
+      for (let chunkIndex = 1; ideaOffset < targetCount; chunkIndex += 1) {
+        if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
+        const currentIdeaCount = Math.min(ideaChunkSize, targetCount - ideaOffset);
+        const themeDirective = ideaChunkTheme(chunkIndex, ideaChunkCount, ideaGenerationSettings);
+        updateProgress({ current: chunkIndex - 1, detail: `訴求案を分割生成しています… ${chunkIndex - 1}/${ideaChunkCount}` });
+        const ideaResult = await postJson<{ variants: Variant[]; mode: Mode; debug?: ApiDebug }>("/api/ideas", {
+          ...productInput,
+          count: currentIdeaCount,
+          totalCount: targetCount,
+          chunkIndex,
+          chunkCount: ideaChunkCount,
+          startIndex: ideaOffset + 1,
+          divisions: chunkDivision,
+          sheetRuns: plannedSheets,
+          previousIdeasSummary: previousIdeasSummary(ideaVariants),
+          themeDirective,
+          ideaSettings: ideaGenerationSettings,
+          cancelKey,
+          codexSettings: stepCodexSettings.ideas,
+          promptTemplates: activePromptTemplates,
+        }, activeAbortRef.current?.signal);
+        if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
+        if (ideaResult.mode !== "codex") ideaMode = ideaResult.mode;
+        const normalizedIdeas = ideaResult.variants.slice(0, currentIdeaCount).map((variant, index) => ({
+          ...variant,
+          index: index + 1,
+          globalIndex: ideaOffset + index + 1,
+        }));
+        if (normalizedIdeas.length < currentIdeaCount) throw new Error(`訴求案が不足しました: chunk ${chunkIndex} returned ${normalizedIdeas.length}/${currentIdeaCount}`);
+        ideaVariants.push(...normalizedIdeas);
+        ideaOffset += normalizedIdeas.length;
+        updateProgress({ current: chunkIndex, detail: `訴求案を分割生成しています… ${chunkIndex}/${ideaChunkCount}` });
+        addLog({ level: "success", title: `Step 1: 案生成チャンク完了`, detail: `チャンク=${chunkIndex}/${ideaChunkCount}\n案=${ideaVariants.length}/${targetCount}\nテーマ=${themeDirective}\n${formatDebug(ideaResult.debug)}\n${formatVariantsForLog(normalizedIdeas)}` });
+        await yieldToBrowser();
+        if (!normalizedIdeas.length) throw new Error("訴求案生成が空で返りました");
+      }
+      if (ideaVariants.length < targetCount) throw new Error(`訴求案が不足しました: ${ideaVariants.length}/${targetCount}`);
+      updateProgress({ current: ideaChunkCount, detail: `画像を生成しています… 0/${plannedSheets}シート` });
+      addLog({ level: "success", title: `訴求案生成完了: ${ideaMode}`, detail: `案数=${ideaVariants.length}\n${formatVariantsForLog(ideaVariants)}` });
       addLog({ level: "info", title: "Step 2: 画像生成開始", detail: `Codexリクエストを直列実行\n予定リクエスト=${plannedRequests}回\n1度での画像生成数=${requestImageCount}枚\n1シート=${chunkDivision}分割\n合計=${targetCount}案` });
-      const sheets: SheetResponse[] = [];
       let variantOffset = 0;
       let sheetOffset = 0;
       while (variantOffset < targetCount) {
@@ -1199,7 +1346,7 @@ ${requestModeLabel}`,
         const remainingSheets = Math.ceil(remaining / currentDivisions);
         const currentSheetRuns = Math.min(requestImageCount, remainingSheets);
         const take = currentDivisions * currentSheetRuns;
-        const chunkVariants = ideaResult.variants.slice(variantOffset, variantOffset + take);
+        const chunkVariants = ideaVariants.slice(variantOffset, variantOffset + take);
         const sheetsResult = await postJson<{ sheets: SheetResponse[]; mode: Mode; debug?: ApiDebug }>("/api/sheets", {
           input: productInput,
           variants: chunkVariants,
@@ -1219,23 +1366,35 @@ ${requestModeLabel}`,
             globalIndex: (variant.globalIndex || variant.index) + variantOffset,
           })),
         }));
-        sheets.push(...chunkSheets);
-        const partialVariants = sheets.flatMap((sheet) => sheet.variants).slice(0, targetCount);
-        setSheetUrls(sheets.map((sheet) => sheet.sheetUrl));
+        generatedSheetUrls.push(...chunkSheets.map((sheet) => sheet.sheetUrl));
+        generatedVariants.push(...chunkSheets.flatMap((sheet) => sheet.variants));
+        const partialVariants = generatedVariants.slice(0, targetCount);
+        setSheetUrls([...generatedSheetUrls]);
         setSheetVariants(partialVariants);
         variantOffset += take;
         sheetOffset += currentSheetRuns;
-        updateProgress({ current: 1 + sheetOffset, detail: `画像を生成しています… ${Math.min(sheetOffset, plannedSheets)}/${plannedSheets}シート` });
+        const shouldSaveHistory = sheetOffset === currentSheetRuns || sheetOffset - lastHistorySaveSheetCount >= HISTORY_UPDATE_SHEET_INTERVAL || variantOffset >= targetCount;
+        if (shouldSaveHistory) {
+          try {
+            const partialRecord = await saveGenerationHistory(productInput, partialVariants, generatedSheetUrls, historyId);
+            lastHistorySaveSheetCount = sheetOffset;
+            addLog({ level: "success", title: "生成履歴を更新", detail: `${historyLabel(partialRecord)}\n途中結果=${partialVariants.length}/${targetCount}候補` });
+          } catch (historyError) {
+            addLog({ level: "warn", title: "生成履歴の途中保存に失敗", detail: historyError instanceof Error ? historyError.message : String(historyError) });
+          }
+        }
+        updateProgress({ current: ideaChunkCount + sheetOffset, detail: `画像を生成しています… ${Math.min(sheetOffset, plannedSheets)}/${plannedSheets}シート` });
         addLog({ level: "success", title: `Step 2: 画像生成チャンク完了`, detail: `シート=${sheetOffset}/${plannedSheets}\n候補=${Math.min(variantOffset, targetCount)}/${targetCount}\n${formatDebug(sheetsResult.debug)}` });
+        await yieldToBrowser();
       }
-      if (!sheets.length) throw new Error(`画像生成がすべて失敗しました。詳細は実行状況と public/data/request-log.jsonl を確認してください。`);
-      const allVariants = sheets.flatMap((sheet) => sheet.variants).slice(0, targetCount);
-      const urls = sheets.map((sheet) => sheet.sheetUrl);
+      if (!generatedSheetUrls.length) throw new Error(`画像生成がすべて失敗しました。詳細は実行状況と public/data/request-log.jsonl を確認してください。`);
+      const allVariants = generatedVariants.slice(0, targetCount);
+      const urls = [...generatedSheetUrls];
       setSheetUrls(urls);
       setSheetVariants(allVariants);
-      addLog({ level: "success", title: `Step 2: 画像生成完了`, detail: `シート=${sheets.length}枚\n候補=${allVariants.length}案\n${sheets.map((sheet) => `シート${sheet.runIndex}: ${sheet.sheetUrl} / ${sheet.variants.length}候補`).join("\n")}` });
+      addLog({ level: "success", title: `Step 2: 画像生成完了`, detail: `シート=${urls.length}枚\n候補=${allVariants.length}案\n${urls.slice(0, 20).map((url, index) => `シート${index + 1}: ${url}`).join("\n")}${urls.length > 20 ? `\n...ほか${urls.length - 20}シート` : ""}` });
       try {
-        const record = await saveGenerationHistory(productInput, allVariants, urls);
+        const record = await saveGenerationHistory(productInput, allVariants, urls, historyId);
         addLog({ level: "success", title: "生成履歴を保存", detail: `${historyLabel(record)}\n${record.id}` });
       } catch (historyError) {
         addLog({ level: "warn", title: "生成履歴の保存に失敗", detail: historyError instanceof Error ? historyError.message : String(historyError) });
@@ -1246,6 +1405,16 @@ ${requestModeLabel}`,
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (stopRequestedRef.current || message.includes("abort") || message.includes("停止")) {
+        const partialVariants = generatedVariants.slice(0, targetCount);
+        const partialUrls = [...generatedSheetUrls];
+        if (partialVariants.length || partialUrls.length) {
+          try {
+            const record = await saveGenerationHistory(productInput, partialVariants, partialUrls, historyId);
+            addLog({ level: "success", title: "停止時の履歴を保存", detail: `${historyLabel(record)}\n候補=${partialVariants.length}` });
+          } catch (historyError) {
+            addLog({ level: "warn", title: "停止時の履歴保存に失敗", detail: historyError instanceof Error ? historyError.message : String(historyError) });
+          }
+        }
         setStatus("停止しました。途中までの候補は残しています");
         finishProgress("停止しました", "途中までできた候補はそのまま残しています");
         addLog({ level: "warn", title: "生成停止", detail: message });
@@ -1687,7 +1856,7 @@ ${requestModeLabel}`,
     const saved = savedSourceUrls();
     const seen = new Set<string>();
     const items: UnsavedBanner[] = [];
-    for (const record of historyRecords) {
+    for (const record of [...historyRecords, ...orphanHistoryRecords]) {
       const product = [record.input?.brandName, record.input?.productName].filter(Boolean).join(" / ") || "商品不明";
       for (const variant of record.ideas || []) {
         if (!variant.cropUrl || seen.has(variant.cropUrl) || saved.has(variant.cropUrl)) continue;
@@ -1697,7 +1866,7 @@ ${requestModeLabel}`,
     }
     const query = librarySearch.trim().toLowerCase();
     return items.filter((item) => {
-      const historyMatch = !unsavedHistoryFilter || item.historyId === unsavedHistoryFilter;
+      const historyMatch = !unsavedHistoryFilter || (unsavedHistoryFilter === "__orphan__" ? item.historyId.startsWith("orphan-") : item.historyId === unsavedHistoryFilter);
       const queryMatch = !query || [item.product, item.variant.appeal, item.variant.prompt, item.url].filter(Boolean).join(" ").toLowerCase().includes(query);
       return historyMatch && queryMatch;
     });
@@ -2741,10 +2910,10 @@ ${requestModeLabel}`,
                 <div className="controlGrid mt">
                   <label>1回あたりの分割数
                     <select value={divisions} onChange={(event) => { setDivisions(Number(event.target.value)); resetGenerated(); }}>
-                      <option value={1}>1分割</option><option value={2}>2分割</option><option value={4}>4分割</option><option value={9}>9分割</option>
+                      <option value={1}>1分割</option><option value={2}>2分割</option><option value={4}>4分割</option>
                     </select>
                   </label>
-                  <label>生成回数<input min={1} max={40} type="number" value={sheetRuns} onChange={(event) => { setSheetRuns(Math.min(40, Math.max(1, Number(event.target.value) || 1))); resetGenerated(); }} /></label>
+                  <label>生成回数<input min={1} max={100} type="number" value={sheetRuns} onChange={(event) => { setSheetRuns(Math.min(100, Math.max(1, Number(event.target.value) || 1))); resetGenerated(); }} /></label>
                 </div>
                 <div className="bulkBox mt">
                   <label>1度での画像生成数
@@ -2976,6 +3145,7 @@ ${requestModeLabel}`,
                   <select value={unsavedHistoryFilter} onChange={(event) => { setUnsavedHistoryFilter(event.target.value); clearLibrarySelection(); }}>
                     <option value="">生成履歴すべて</option>
                     {historyRecords.map((record) => <option value={record.id} key={record.id}>{historyLabel(record)}</option>)}
+                    {orphanHistoryRecords.length ? <option value="__orphan__">履歴なしの未保存画像</option> : null}
                   </select>
                 </div>
               )}
@@ -3285,6 +3455,42 @@ ${requestModeLabel}`,
             </div>
           </div>
           <section className="settingsLayout compact">
+            <div className="panel ideaStrategyPanel">
+              <div className="sectionHead">
+                <h2>大量生成の案設計</h2>
+                <span className="mutedText">100件以上でも案が薄まらないよう、Step 1を小さく分けてテーマを散らします。</span>
+              </div>
+              <div className="ideaStrategyGrid">
+                <label>1回の案生成数
+                  <input
+                    min={4}
+                    max={40}
+                    type="number"
+                    value={ideaGenerationSettings.chunkSize}
+                    onChange={(event) => updateIdeaGenerationSettings({ chunkSize: Number(event.target.value) || DEFAULT_IDEA_GENERATION_SETTINGS.chunkSize })}
+                  />
+                  <small>推奨20。小さいほど濃くなりやすく、大量時も止まりにくいです。</small>
+                </label>
+                <label>テーマ分散
+                  <select value={ideaGenerationSettings.themeMode} onChange={(event) => updateIdeaGenerationSettings({ themeMode: event.target.value as IdeaGenerationSettings["themeMode"] })}>
+                    <option value="balanced">バランス重視</option>
+                    <option value="wide">幅広さ重視</option>
+                  </select>
+                  <small>幅広さ重視はチャンクごとの見た目・訴求をより大きく変えます。</small>
+                </label>
+                <label>重複回避
+                  <select value={ideaGenerationSettings.overlapAvoidance} onChange={(event) => updateIdeaGenerationSettings({ overlapAvoidance: event.target.value as IdeaGenerationSettings["overlapAvoidance"] })}>
+                    <option value="strong">強め</option>
+                    <option value="normal">標準</option>
+                  </select>
+                  <small>既出案の要約を渡して、似たコピーや構図の言い換えを抑えます。</small>
+                </label>
+              </div>
+              <div className="ideaStrategyPreview">
+                <strong>現在の設計</strong>
+                <span>作成数 {generationTotal}件なら Step 1 は約 {Math.ceil(generationTotal / Math.max(1, ideaGenerationSettings.chunkSize))} 回に分けて考えます。</span>
+              </div>
+            </div>
             <div className="panel promptPresetList">
               <div className="sectionHead">
                 <h2>ステップ別設定</h2>

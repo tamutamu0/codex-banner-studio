@@ -1622,6 +1622,48 @@ textarea { min-height: 72px; resize: vertical }
 .settingsLayout.compact .promptPresetList > .sectionHead {
   grid-column: 1 / -1;
 }
+.ideaStrategyPanel {
+  display: grid;
+  gap: 14px;
+}
+.ideaStrategyGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.ideaStrategyGrid label {
+  display: grid;
+  gap: 6px;
+  color: var(--sub);
+  font-size: 12px;
+  align-content: start;
+}
+.ideaStrategyGrid input,
+.ideaStrategyGrid select {
+  min-height: 38px;
+  padding: 8px 10px;
+}
+.ideaStrategyGrid small {
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.ideaStrategyPreview {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: var(--r);
+  background: #effaf7;
+  color: var(--sub);
+  font-size: 12px;
+}
+.ideaStrategyPreview strong {
+  color: var(--accent);
+  white-space: nowrap;
+}
 .promptStepCard {
   display: grid;
   gap: 10px;
@@ -1982,6 +2024,8 @@ textarea { min-height: 72px; resize: vertical }
 @media (max-width: 1000px) {
   .settingsLayout { grid-template-columns: 1fr }
   .settingsLayout.compact .promptPresetList { grid-template-columns: 1fr }
+  .ideaStrategyGrid { grid-template-columns: 1fr }
+  .ideaStrategyPreview { align-items: flex-start; flex-direction: column }
   .stepModelSettings { grid-template-columns: 1fr }
   .promptPresetSelectRow { grid-template-columns: 1fr }
   .promptActionBar { justify-content: flex-start }

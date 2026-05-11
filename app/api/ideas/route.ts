@@ -59,15 +59,61 @@ function ensureRequiredVariants(variants: Variant[], input: ProductInput) {
 
 export async function POST(request: Request) {
   const startedAt = Date.now();
-  const input = (await request.json()) as ProductInput & { count?: number; divisions?: number; sheetRuns?: number; cancelKey?: string; codexSettings?: CodexSettingsBody; promptTemplates?: PromptTemplateMap };
+  const input = (await request.json()) as ProductInput & {
+    count?: number;
+    totalCount?: number;
+    chunkIndex?: number;
+    chunkCount?: number;
+    startIndex?: number;
+    previousIdeasSummary?: string;
+    themeDirective?: string;
+    ideaSettings?: { chunkSize?: number; themeMode?: string; overlapAvoidance?: string };
+    divisions?: number;
+    sheetRuns?: number;
+    cancelKey?: string;
+    codexSettings?: CodexSettingsBody;
+    promptTemplates?: PromptTemplateMap;
+  };
   const count = Math.min(Math.max(Number(input.count || 8), 1), 120);
+  const totalCount = Math.max(Number(input.totalCount || count), count);
+  const chunkIndex = Math.max(Number(input.chunkIndex || 1), 1);
+  const chunkCount = Math.max(Number(input.chunkCount || 1), 1);
+  const startIndex = Math.max(Number(input.startIndex || 1), 1);
+  const previousIdeasSummary = input.previousIdeasSummary || "なし";
+  const themeDirective = input.themeDirective || "全体バランスを見て、王道・変化球・テイスト主導・商品特徴主導を混ぜる。";
+  const chunkContext = chunkCount > 1
+    ? `全体では${totalCount}案を作る。これはチャンク${chunkIndex}/${chunkCount}で、${startIndex}番目から${count}案だけを作る。今回の担当テーマと既出案を踏まえ、前回までと訴求・構図・テイストが被らない案にする。`
+    : `全体で${count}案を作る。王道・変化球・テイスト主導・商品特徴主導をバランスよく混ぜる。`;
+  const {
+    count: _count,
+    totalCount: _totalCount,
+    chunkIndex: _chunkIndex,
+    chunkCount: _chunkCount,
+    startIndex: _startIndex,
+    previousIdeasSummary: _previousIdeasSummary,
+    themeDirective: _themeDirective,
+    ideaSettings: _ideaSettings,
+    divisions: _divisions,
+    sheetRuns: _sheetRuns,
+    cancelKey: _cancelKey,
+    codexSettings: _codexSettings,
+    promptTemplates: _promptTemplates,
+    ...productPromptInput
+  } = input;
   const jobId = `ideas-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   let fallbackReason = "";
   const promptValues = {
     count,
+    totalCount,
+    chunkIndex,
+    chunkCount,
+    startIndex,
+    chunkContext,
+    themeDirective,
+    previousIdeasSummary,
     priceInfo: input.priceInfo || "none",
     priceMode: input.priceMode || "none",
-    productInputJson: JSON.stringify(input, null, 2),
+    productInputJson: JSON.stringify(productPromptInput, null, 2),
   };
   const customPrompt = input.promptTemplates?.ideas
     ? renderPromptWithGuardrails("ideas", input.promptTemplates.ideas, promptValues)
@@ -80,7 +126,7 @@ export async function POST(request: Request) {
     step: "api-ideas",
     status: "start",
     message: "Step 1 ideas request received",
-    detail: { count, divisions: input.divisions, sheetRuns: input.sheetRuns, cancelKey: input.cancelKey, codexSettings: input.codexSettings, input },
+    detail: { count, totalCount, chunkIndex, chunkCount, startIndex, themeDirective, divisions: input.divisions, sheetRuns: input.sheetRuns, cancelKey: input.cancelKey, codexSettings: input.codexSettings, product: productPromptInput },
   });
 
   try {

@@ -37,6 +37,16 @@ export const REQUIRED_GUARDRAILS: Record<PromptStep, string> = {
 - prompt は画像生成の完成プロンプトではなく、日本語のラフなバナー案にする。
 - 商品入力と矛盾する訴求、未確認の成分・効能・別カテゴリの表現は入れない。
 - 複数案の場合、直球の商品特徴訴求と、自由に考える変化球を少なくとも1つずつ混ぜる。
+- 大量生成の一部として呼ばれている場合は、今回の担当テーマと既出案を必ず踏まえ、同じ訴求・同じ構図・同じテイストを繰り返さない。
+
+案生成の分割文脈:
+{{chunkContext}}
+
+今回の担当テーマ:
+{{themeDirective}}
+
+前チャンクまでの既出案:
+{{previousIdeasSummary}}
 
 商品入力:
 {{productInputJson}}
@@ -94,6 +104,10 @@ export const REQUIRED_GUARDRAILS: Record<PromptStep, string> = {
 export const VARIABLE_HELP: Record<PromptStep, Array<{ key: string; label: string; description: string }>> = {
   ideas: [
     { key: "count", label: "案数", description: "作成する訴求案の数" },
+    { key: "totalCount", label: "総案数", description: "全体で作成する候補数" },
+    { key: "chunkContext", label: "分割文脈", description: "何回目の案生成か、全体のどこを担当するか" },
+    { key: "themeDirective", label: "担当テーマ", description: "このチャンクで散らす訴求・見た目の方向性" },
+    { key: "previousIdeasSummary", label: "既出案", description: "前チャンクまでの案要約。重複回避に使う" },
     { key: "priceInfo", label: "価格情報", description: "生成画面で指定した価格文言" },
     { key: "priceMode", label: "価格モード", description: "all / mixed / none" },
     { key: "productInputJson", label: "商品入力JSON", description: "商品名、ブランド、画像説明、メモなど" },
@@ -144,8 +158,19 @@ Schema:
 2. 調べた内容から、WEB広告バナー案をちょうど {{count}} 個作る。
 3. 各案は「訴求案」と「バナーのテイスト/構図のざっくり指定」を日本語で書く。
 
+案生成の分割文脈:
+{{chunkContext}}
+
+今回の担当テーマ:
+{{themeDirective}}
+
+前チャンクまでの既出案:
+{{previousIdeasSummary}}
+
 考え方:
 - 全案を細かい訴求指定にしすぎない。
+- 大量生成時は、全体を一気に薄く広げるのではなく、このチャンクの担当テーマを深く掘る。
+- 既出案と似たコピー、似た構図、似た見た目、似た訴求の言い換えは避ける。
 - 「黒板チョーク」「TV紹介風」「新聞/雑誌風」「漫画風」のように、表現テイストだけを強く指定し、訴求は画像生成時に商品調査から自然に決める案も混ぜる。
 - 具体的な商品特徴や面白い見た目がある場合だけ、それを訴求フックとして指定する。
 - 目安として、半分くらいはテイスト主導、半分くらいは商品特徴/価格/悩み主導にする。

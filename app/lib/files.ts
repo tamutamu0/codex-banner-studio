@@ -23,6 +23,9 @@ export type ProjectRecord = {
     divisions?: number;
     sheetRuns?: number;
     imagesPerRequest?: number;
+    ideaChunkSize?: number;
+    ideaThemeMode?: "balanced" | "wide";
+    ideaOverlapAvoidance?: "normal" | "strong";
   };
   ideas: Variant[];
   sheetUrl?: string;
