@@ -217,7 +217,7 @@ textarea { min-height: 72px; resize: vertical }
 .danger:hover:not(:disabled) { background: #b91c1c }
 .sectionHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px }
 .sectionHead button { min-height: 34px; padding: 0 12px; font-size: 13px }
-.headerActions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px }
+.headerActions { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap }
 .ghostIconButton {
   min-height: 28px !important;
   padding: 0 10px !important;

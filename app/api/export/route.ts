@@ -4,13 +4,13 @@ import { NextResponse } from "next/server";
 import { generatedDir, makeId, type ProductInput, type Variant } from "@/app/lib/files";
 
 type Body = {
-  action?: "createFolder" | "saveImage" | "moveFile" | "moveFolder" | "deleteFolder" | "deleteFile" | "reorderFolder" | "updateMeta" | "setDisplayVersion";
+  action?: "createFolder" | "saveImage" | "moveFile" | "moveFolder" | "deleteFolder" | "deleteFile" | "reorderFolder" | "updateMeta" | "setDisplayVersion" | "manualUpload";
   sourceUrl?: string;
   sourceLibraryUrl?: string;
   fileUrl?: string;
   input?: ProductInput;
   variant?: Variant | null;
-  stage?: "candidate" | "final";
+  stage?: "candidate" | "final" | "manual";
   aspectRatio?: string;
   editInstruction?: string;
   generationPrompt?: string;
@@ -45,6 +45,7 @@ type SavedFile = {
   rootId?: string;
   parentUrl?: string;
   sourceUrl?: string;
+  sourceType?: string;
   aspectRatio?: string;
   editInstruction?: string;
   generationPrompt?: string;
@@ -58,6 +59,15 @@ type SavedFile = {
   isDisplay?: boolean;
   versionCount?: number;
   versions?: SavedFile[];
+};
+
+type SavedBanner = {
+  url: string;
+  filePath: string;
+  propertyUrl?: string;
+  propertyPath?: string;
+  folderPath: string;
+  folder?: string;
 };
 
 const savedRoot = path.join(process.cwd(), "public", "saved-banners");
@@ -160,6 +170,7 @@ function sidecarUrlForImage(imageUrl: string) {
 
 function publicSafeMetadata(body: Body, fileName: string, folder: string, assetId: string, lineage: Record<string, any>) {
   const variant = body.variant || undefined;
+  const isManualUpload = body.stage === "manual";
   return {
     schemaVersion: 1,
     assetId,
@@ -170,6 +181,7 @@ function publicSafeMetadata(body: Body, fileName: string, folder: string, assetI
     sourceUrl: body.sourceUrl || "",
     folder,
     stage: body.stage || "banner",
+    sourceType: isManualUpload ? "manual_upload" : "generated",
     aspectRatio: body.aspectRatio || "candidate",
     product: {
       brandName: body.input?.brandName || "",
@@ -180,8 +192,8 @@ function publicSafeMetadata(body: Body, fileName: string, folder: string, assetI
     creative: {
       index: variant?.globalIndex || variant?.index || null,
       sheetRun: variant?.sheetRun || null,
-      appeal: variant?.appeal || "",
-      stylePrompt: variant?.prompt || "",
+      appeal: variant?.appeal || (isManualUpload ? "手動アップロード" : ""),
+      stylePrompt: variant?.prompt || (isManualUpload ? "ライブラリに手動追加した画像です。" : ""),
       priceTreatment: variant?.priceTreatment || "unknown",
     },
     lineage,
@@ -242,6 +254,7 @@ function savedFileFromMeta(entryName: string, imagePath: string, imageUrl: strin
     rootId,
     parentUrl: typeof meta.lineage?.parentUrl === "string" ? meta.lineage.parentUrl : "",
     sourceUrl: typeof meta.sourceUrl === "string" ? meta.sourceUrl : "",
+    sourceType: typeof meta.sourceType === "string" ? meta.sourceType : "",
     aspectRatio: typeof meta.aspectRatio === "string" ? meta.aspectRatio : typeof meta.lineage?.aspectRatio === "string" ? meta.lineage.aspectRatio : "",
     editInstruction: typeof meta.lineage?.editInstruction === "string" ? meta.lineage.editInstruction : "",
     generationPrompt: typeof meta.lineage?.generationPrompt === "string" ? meta.lineage.generationPrompt : "",
@@ -277,6 +290,20 @@ async function collectSavedImagePaths(dir = savedRoot): Promise<string[]> {
 
 async function buildLineage(body: Body, assetId: string) {
   const now = new Date().toISOString();
+  if (body.stage === "manual") {
+    return {
+      rootId: assetId,
+      parentAssetId: "",
+      parentUrl: "",
+      generatedFromUrl: "",
+      aspectRatio: body.aspectRatio || "manual",
+      editInstruction: "",
+      generationPrompt: "手動アップロード",
+      display: true,
+      createdAt: now,
+      sourceType: "manual_upload",
+    };
+  }
   if (!body.sourceLibraryUrl) {
     return {
       rootId: assetId,
@@ -356,7 +383,60 @@ export async function GET() {
   return NextResponse.json({ tree, rootPath: savedRoot });
 }
 
+async function handleManualUpload(request: Request) {
+  const form = await request.formData();
+  const files = form.getAll("images").filter((item): item is File => item instanceof File && item.type.startsWith("image/"));
+  if (!files.length) return NextResponse.json({ message: "追加する画像がありません" }, { status: 400 });
+  const folder = String(form.get("folder") || "");
+  const { normalized: targetFolder, target: targetDir } = resolveSavedFolder(folder);
+  await mkdir(targetDir, { recursive: true });
+  const saved: SavedBanner[] = [];
+  for (const [index, file] of files.entries()) {
+    const ext = path.extname(file.name || "") || (file.type === "image/webp" ? ".webp" : file.type === "image/jpeg" ? ".jpg" : ".png");
+    const originalName = safeSegment(path.basename(file.name || `manual-${index + 1}`, ext));
+    const fileName = `manual-${originalName}-${makeId("img").replace("img-", "")}${ext.toLowerCase()}`;
+    const targetPath = path.join(targetDir, fileName);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await writeFile(targetPath, buffer);
+    const assetId = makeId("asset");
+    const body: Body = {
+      action: "manualUpload",
+      stage: "manual",
+      folder: targetFolder,
+      sourceUrl: "",
+      aspectRatio: "manual",
+      variant: {
+        index: index + 1,
+        appeal: "手動アップロード",
+        prompt: `手動でライブラリに追加。元ファイル名: ${file.name || "unknown"}`,
+        priceTreatment: "without_price",
+      },
+    };
+    const lineage = await buildLineage(body, assetId);
+    const propertyPath = sidecarPathForImage(targetPath);
+    await writeFile(propertyPath, JSON.stringify({
+      ...publicSafeMetadata(body, fileName, targetFolder, assetId, lineage),
+      originalFileName: file.name || "",
+      mimeType: file.type || "",
+      manualUpload: true,
+    }, null, 2), "utf8");
+    const url = `/saved-banners/${targetFolder ? `${targetFolder}/` : ""}${fileName}`;
+    saved.push({
+      url,
+      filePath: targetPath,
+      propertyUrl: sidecarUrlForImage(url),
+      propertyPath,
+      folderPath: targetDir,
+      folder: targetFolder,
+    });
+  }
+  const tree = await readSavedNode();
+  return NextResponse.json({ saved, tree, rootPath: savedRoot, folder: targetFolder });
+}
+
 export async function POST(request: Request) {
+  const contentType = request.headers.get("content-type") || "";
+  if (contentType.includes("multipart/form-data")) return handleManualUpload(request);
   const body = (await request.json()) as Body;
   if (body.action === "createFolder") {
     const parent = normalizeFolder(body.folder || "");

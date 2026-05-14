@@ -79,6 +79,7 @@ type SavedFile = {
   rootId?: string;
   parentUrl?: string;
   sourceUrl?: string;
+  sourceType?: string;
   aspectRatio?: string;
   editInstruction?: string;
   generationPrompt?: string;
@@ -94,6 +95,7 @@ type SavedFile = {
   versions?: SavedFile[];
 };
 type SavedBanner = { url: string; filePath: string; propertyUrl?: string; propertyPath?: string; folderPath: string; folder?: string; tree?: SavedNode; duplicated?: boolean };
+type ManualUploadResponse = { saved: SavedBanner[]; tree: SavedNode; rootPath: string; folder: string };
 type UnsavedBanner = { url: string; product: string; createdAt: string; historyId: string; variant: Variant };
 type LibraryDetailItem = {
   kind: "saved" | "unsaved";
@@ -110,6 +112,7 @@ type LibraryDetailItem = {
   assetId?: string;
   rootId?: string;
   parentUrl?: string;
+  sourceType?: string;
   aspectRatio?: string;
   editInstruction?: string;
   generationPrompt?: string;
@@ -469,6 +472,7 @@ export default function Home() {
   const activeCancelKeyRef = useRef("");
   const activeAbortRef = useRef<AbortController | null>(null);
   const stopRequestedRef = useRef(false);
+  const libraryUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [sheetUrls, setSheetUrls] = useState<string[]>([]);
   const [sheetVariants, setSheetVariants] = useState<Variant[]>([]);
   const [selected, setSelected] = useState<Variant | null>(null);
@@ -1751,6 +1755,11 @@ ${requestModeLabel}`,
 
   async function dropToSave(event: React.DragEvent, folder = selectedSaveFolder) {
     event.preventDefault();
+    const droppedFiles = Array.from(event.dataTransfer.files || []).filter((file) => file.type.startsWith("image/"));
+    if (droppedFiles.length) {
+      await uploadManualLibraryFiles(droppedFiles, folder);
+      return;
+    }
     const libraryUrl = event.dataTransfer.getData("application/library-file");
     if (libraryUrl) {
       void moveLibraryFile(libraryUrl, folder);
@@ -1771,6 +1780,36 @@ ${requestModeLabel}`,
       }
     } catch {
       setStatus("ドラッグした画像を読み取れませんでした");
+    }
+  }
+
+  async function uploadManualLibraryFiles(files: File[], folder = selectedSaveFolder) {
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    if (!imageFiles.length) return;
+    setBusy(true);
+    setStatus("ライブラリへ画像を追加中");
+    try {
+      const form = new FormData();
+      form.append("folder", folder);
+      for (const file of imageFiles) form.append("images", file);
+      const response = await fetch("/api/export", { method: "POST", body: form });
+      if (!response.ok) throw new Error(await response.text());
+      const result = (await response.json()) as ManualUploadResponse;
+      setSaveTree(result.tree);
+      setSaveRootPath(result.rootPath);
+      setSelectedSaveFolder(result.folder || folder);
+      setLibraryView("saved");
+      setLibSelectedUrls(new Set(result.saved.map((item) => item.url)));
+      setLibSelectedUrl(result.saved[0]?.url || "");
+      setStatus(`${result.saved.length}枚をライブラリに追加しました`);
+      addLog({ level: "success", title: "手動アップロード", detail: result.saved.map((item) => item.filePath).join("\n") });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus("画像追加エラー");
+      addLog({ level: "error", title: "画像追加エラー", detail: message });
+    } finally {
+      setBusy(false);
+      if (libraryUploadInputRef.current) libraryUploadInputRef.current.value = "";
     }
   }
 
@@ -1977,6 +2016,7 @@ ${requestModeLabel}`,
           assetId: file.assetId,
           rootId: file.rootId,
           parentUrl: file.parentUrl,
+          sourceType: file.sourceType,
           aspectRatio: file.aspectRatio,
           editInstruction: file.editInstruction,
           generationPrompt: file.generationPrompt,
@@ -2615,6 +2655,7 @@ ${requestModeLabel}`,
             {item.kind === "saved" ? (
               <>
                 <div><dt>評価</dt><dd className="detailStars">{item.rating ? "★".repeat(item.rating) : "未評価"}</dd></div>
+                <div><dt>追加方法</dt><dd>{item.sourceType === "manual_upload" ? "手動アップロード" : "生成画像"}</dd></div>
                 <div><dt>比率</dt><dd>{item.aspectRatio || "-"}</dd></div>
                 {item.parentUrl ? <div><dt>生成元</dt><dd>{renderSourcePreview(item.parentUrl, fileNameFromUrl(item.parentUrl))}</dd></div> : null}
               </>
@@ -3017,6 +3058,7 @@ ${requestModeLabel}`,
                   >
                     <div className="saveDrop">
                       <strong>ここへドラッグして保存</strong>
+                      <span>画像ファイルを直接追加できます</span>
                       {selectedCropUrls.size > 0 && (
                         <button className="saveSelectedButton" type="button" disabled={busy} onClick={() => void saveSelectedCrops()}>
                           選択した{selectedCropUrls.size}枚をここに保存
@@ -3111,6 +3153,19 @@ ${requestModeLabel}`,
               <div className="sectionHead">
                 <div><h2>{libraryView === "saved" ? selectedSaveFolder || "保存済み" : "未保存"}</h2></div>
                 <div className="headerActions">
+                  {libraryView === "saved" && (
+                    <>
+                      <button className="ghostIconButton" type="button" disabled={busy} onClick={() => libraryUploadInputRef.current?.click()}>画像を追加</button>
+                      <input
+                        ref={libraryUploadInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        hidden
+                        onChange={(event) => void uploadManualLibraryFiles(Array.from(event.target.files || []))}
+                      />
+                    </>
+                  )}
                   <button className="ghostIconButton" type="button" disabled={libraryView === "saved" ? !currentLibraryFiles().length : !unsavedLibraryFiles().length} onClick={downloadCurrentLibraryView}>一括ダウンロード</button>
                   <span className="badge">
                     {libraryView === "saved" ? currentLibraryFiles().length : unsavedLibraryFiles().length}枚
