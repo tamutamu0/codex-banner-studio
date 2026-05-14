@@ -40,6 +40,7 @@ type Variant = {
 
 type Mode = "codex" | "local-fallback";
 type Tab = "generate" | "products" | "library" | "settings";
+type CreateMode = "product" | "image";
 
 type ApiDebug = {
   step?: string;
@@ -142,6 +143,17 @@ type IdeaGenerationSettings = {
   chunkSize: number;
   themeMode: "balanced" | "wide";
   overlapAvoidance: "normal" | "strong";
+};
+type BannerAnalysisItem = {
+  id: string;
+  category: string;
+  item: string;
+  content: string;
+  locked?: boolean;
+};
+type BannerAnalysisResult = {
+  summary: string;
+  items: BannerAnalysisItem[];
 };
 type HistoryRecord = {
   id: string;
@@ -487,12 +499,20 @@ export default function Home() {
   const [libraryFolderWidth, setLibraryFolderWidth] = useState(340);
   const [libraryThumbSize, setLibraryThumbSize] = useState(72);
   const [genLibraryHeight, setGenLibraryHeight] = useState(300);
+  const [genSettingsWidth, setGenSettingsWidth] = useState(320);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [orphanHistoryRecords, setOrphanHistoryRecords] = useState<HistoryRecord[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState("");
   const [direction, setDirection] = useState("");
   const [priceInfo, setPriceInfo] = useState("");
   const [priceMode, setPriceMode] = useState<"all" | "mixed" | "none">("all");
+  const [createMode, setCreateMode] = useState<CreateMode>("product");
+  const [imageSourcePickerOpen, setImageSourcePickerOpen] = useState(false);
+  const [imageSourceFolder, setImageSourceFolder] = useState("");
+  const [imageSourceSearch, setImageSourceSearch] = useState("");
+  const [imageSourceUrl, setImageSourceUrl] = useState("");
+  const [imageAnalysis, setImageAnalysis] = useState<BannerAnalysisResult | null>(null);
+  const [imageAnalysisBusy, setImageAnalysisBusy] = useState(false);
   const [editInstruction, setEditInstruction] = useState("");
   const [finalEditInstruction, setFinalEditInstruction] = useState("");
   const [aspectRatio, setAspectRatio] = useState("1024x1024");
@@ -1874,6 +1894,58 @@ ${requestModeLabel}`,
     });
   }
 
+  function imageSourcePickerFiles() {
+    const node = imageSourceFolder ? findNodeByPath(imageSourceFolder) : saveTree;
+    const files = imageSourceFolder ? node?.files || [] : collectLibraryFiles(saveTree);
+    const query = imageSourceSearch.trim().toLowerCase();
+    return files.filter((file) => !query || [file.displayName, file.name, file.url, file.generationPrompt, file.stylePrompt].filter(Boolean).join(" ").toLowerCase().includes(query));
+  }
+
+  function selectedImageSourceFile() {
+    if (!imageSourceUrl) return null;
+    return findSavedFileGroup(imageSourceUrl);
+  }
+
+  function selectImageSource(url: string) {
+    setImageSourceUrl(url);
+    setImageAnalysis(null);
+  }
+
+  async function analyzeImageSource() {
+    if (!imageSourceUrl || imageAnalysisBusy) return;
+    setImageAnalysisBusy(true);
+    setStatus("画像を分解中…");
+    addLog({ level: "info", title: "画像分解開始", detail: imageSourceUrl });
+    try {
+      const sourceFile = selectedImageSourceFile();
+      const result = await postJson<BannerAnalysisResult>("/api/analyze-banner", {
+        imageUrl: imageSourceUrl,
+        fileName: sourceFile?.displayName || sourceFile?.name || fileNameFromUrl(imageSourceUrl),
+        meta: {
+          generationPrompt: sourceFile?.generationPrompt || sourceFile?.stylePrompt || "",
+          editInstruction: sourceFile?.editInstruction || "",
+          aspectRatio: sourceFile?.aspectRatio || "",
+        },
+        codexSettings: stepCodexSettings.ideas,
+      });
+      setImageAnalysis(result);
+      setStatus("画像の分解が完了しました");
+      addLog({ level: "success", title: "画像分解完了", detail: `${result.items.length}項目` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`画像分解エラー: ${message}`);
+      addLog({ level: "error", title: "画像分解エラー", detail: message });
+    } finally {
+      setImageAnalysisBusy(false);
+    }
+  }
+
+  function updateImageAnalysisItem(id: string, patch: Partial<BannerAnalysisItem>) {
+    setImageAnalysis((current) => current
+      ? { ...current, items: current.items.map((item) => item.id === id ? { ...item, ...patch } : item) }
+      : current);
+  }
+
   function savedSourceUrls() {
     const urls = new Set<string>();
     const walk = (node: SavedNode | null) => {
@@ -2344,6 +2416,22 @@ ${requestModeLabel}`,
     window.addEventListener("pointerup", onUp);
   }
 
+  function startGenerateSettingsResize(event: React.PointerEvent) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = genSettingsWidth;
+    const onMove = (moveEvent: PointerEvent) => {
+      const next = Math.min(560, Math.max(280, startWidth + moveEvent.clientX - startX));
+      setGenSettingsWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   function renderSaveNode(node: SavedNode, level = 0) {
     const isActive = node.path === selectedSaveFolder;
     const parentPath = node.path.split("/").slice(0, -1).join("/");
@@ -2476,6 +2564,25 @@ ${requestModeLabel}`,
           </>
         )}
       </>
+    );
+  }
+
+  function renderImageSourceFolderNode(node: SavedNode, depth = 0) {
+    const active = imageSourceFolder === node.path || (!imageSourceFolder && !node.path);
+    const label = depth === 0 ? "保存済み" : node.name;
+    return (
+      <div className="folderNode imageSourceFolderNode" key={node.path || "root"}>
+        <button
+          className={active ? "active" : ""}
+          type="button"
+          style={{ paddingLeft: 10 + depth * 14 }}
+          onClick={() => setImageSourceFolder(node.path)}
+        >
+          <span>{label || "保存済み"}</span>
+          <small>{folderCountLabel(node)}枚</small>
+        </button>
+        {node.children.map((child) => renderImageSourceFolderNode(child, depth + 1))}
+      </div>
     );
   }
 
@@ -2865,115 +2972,211 @@ ${requestModeLabel}`,
               </select>
             </label>
           </div>
-          <div className="gen-layout">
+          <div className="gen-layout" style={{ "--settings-width": `${genSettingsWidth}px` } as React.CSSProperties}>
             {/* Settings panel */}
-            <div className="panel gen-settings form">
-              <label>対象商品
-                <select value={selectedProduct?.id || ""} onChange={(event) => selectProductForGeneration(event.target.value)}>
-                  {products.map((product) => <option value={product.id} key={product.id}>{product.brandName ? `${product.brandName} / ` : ""}{product.name}</option>)}
-                </select>
-              </label>
-              {selectedProduct ? (
-                <div className="productPreview">
+            <div className="gen-left">
+              <div className="panel gen-settings form">
+                <div className="createModeTabs" role="tablist" aria-label="作成方法">
                   <button
-                    className="productMainImage"
+                    className={createMode === "product" ? "active" : ""}
                     type="button"
-                    onMouseEnter={(event) => showHoverPreview(event, selectedProduct.images?.[0]?.url || selectedProduct.imageUrl, selectedProduct.images?.[0]?.description || "商品画像")}
-                    onMouseMove={(event) => showHoverPreview(event, selectedProduct.images?.[0]?.url || selectedProduct.imageUrl, selectedProduct.images?.[0]?.description || "商品画像")}
-                    onMouseLeave={() => setHoverPreview(null)}
-                    onFocus={(event) => {
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      showHoverPreview({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as React.MouseEvent, selectedProduct.images?.[0]?.url || selectedProduct.imageUrl, selectedProduct.images?.[0]?.description || "商品画像");
-                    }}
-                    onBlur={() => setHoverPreview(null)}
+                    role="tab"
+                    aria-selected={createMode === "product"}
+                    data-tip="商品を選び、訴求案から大量にバナー候補を作る時に使います"
+                    onClick={() => setCreateMode("product")}
                   >
-                    <img src={selectedProduct.images?.[0]?.url || selectedProduct.imageUrl} alt={selectedProduct.name} />
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6.5 8.5h11l1 12h-13l1-12Z" /><path d="M9 8.5V7a3 3 0 0 1 6 0v1.5" /></svg>
+                    <span>商品から作る</span>
                   </button>
-                  <div>
-                    <strong>{selectedProduct.brandName ? `${selectedProduct.brandName} / ` : ""}{selectedProduct.name}</strong>
-                    <p>{selectedProduct.notes || "商品情報をもとに作成"}</p>
-                    <div className="miniImages">
-                      {(selectedProduct.images || []).map((image, index) => (
-                        <button
-                          type="button"
-                          key={image.id}
-                          title={image.description || `画像${index + 1}`}
-                          onMouseEnter={(event) => showHoverPreview(event, image.url, image.description || `画像${index + 1}`)}
-                          onMouseMove={(event) => showHoverPreview(event, image.url, image.description || `画像${index + 1}`)}
-                          onMouseLeave={() => setHoverPreview(null)}
-                          onFocus={(event) => {
-                            const rect = event.currentTarget.getBoundingClientRect();
-                            showHoverPreview({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as React.MouseEvent, image.url, image.description || `画像${index + 1}`);
-                          }}
-                          onBlur={() => setHoverPreview(null)}
-                        >
-                          <img src={image.url} alt={image.description || `商品画像${index + 1}`} />
+                  <button
+                    className={createMode === "image" ? "active" : ""}
+                    type="button"
+                    role="tab"
+                    aria-selected={createMode === "image"}
+                    data-tip="既存バナーの構成やテイストを参考にして作る時に使います"
+                    onClick={() => setCreateMode("image")}
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M7 16l4-4 3 3 2-2 3 3" /><circle cx="9" cy="9" r="1.5" /></svg>
+                    <span>画像から作る</span>
+                  </button>
+                </div>
+              <div className="createModePanel">
+                <div className="createModeContent">
+                  {createMode === "product" ? (
+                    <>
+                      <label>対象商品
+                        <select value={selectedProduct?.id || ""} onChange={(event) => selectProductForGeneration(event.target.value)}>
+                          {products.map((product) => <option value={product.id} key={product.id}>{product.brandName ? `${product.brandName} / ` : ""}{product.name}</option>)}
+                        </select>
+                      </label>
+                      {selectedProduct ? (
+                        <div className="productPreview">
+                          <button
+                            className="productMainImage"
+                            type="button"
+                            onMouseEnter={(event) => showHoverPreview(event, selectedProduct.images?.[0]?.url || selectedProduct.imageUrl, selectedProduct.images?.[0]?.description || "商品画像")}
+                            onMouseMove={(event) => showHoverPreview(event, selectedProduct.images?.[0]?.url || selectedProduct.imageUrl, selectedProduct.images?.[0]?.description || "商品画像")}
+                            onMouseLeave={() => setHoverPreview(null)}
+                            onFocus={(event) => {
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              showHoverPreview({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as React.MouseEvent, selectedProduct.images?.[0]?.url || selectedProduct.imageUrl, selectedProduct.images?.[0]?.description || "商品画像");
+                            }}
+                            onBlur={() => setHoverPreview(null)}
+                          >
+                            <img src={selectedProduct.images?.[0]?.url || selectedProduct.imageUrl} alt={selectedProduct.name} />
+                          </button>
+                          <div>
+                            <strong>{selectedProduct.brandName ? `${selectedProduct.brandName} / ` : ""}{selectedProduct.name}</strong>
+                            <p>{selectedProduct.notes || "商品情報をもとに作成"}</p>
+                            <div className="miniImages">
+                              {(selectedProduct.images || []).map((image, index) => (
+                                <button
+                                  type="button"
+                                  key={image.id}
+                                  title={image.description || `画像${index + 1}`}
+                                  onMouseEnter={(event) => showHoverPreview(event, image.url, image.description || `画像${index + 1}`)}
+                                  onMouseMove={(event) => showHoverPreview(event, image.url, image.description || `画像${index + 1}`)}
+                                  onMouseLeave={() => setHoverPreview(null)}
+                                  onFocus={(event) => {
+                                    const rect = event.currentTarget.getBoundingClientRect();
+                                    showHoverPreview({ clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } as React.MouseEvent, image.url, image.description || `画像${index + 1}`);
+                                  }}
+                                  onBlur={() => setHoverPreview(null)}
+                                >
+                                  <img src={image.url} alt={image.description || `商品画像${index + 1}`} />
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : <div className="empty small">商品が未登録です。「商品管理」で追加してください</div>}
+
+                      <label className="mt">作りたいイメージ（任意）
+                        <textarea value={direction} onChange={(event) => { setDirection(event.target.value); resetGenerated(); }} placeholder="例: 高級感を出したい、夏っぽく。空欄ならおまかせで作ります" />
+                      </label>
+
+                      <div className={`priceBox mt ${priceInfo.trim() ? "hasPrice" : ""}`}>
+                        <label>価格<input value={priceInfo} onChange={(event) => { setPriceInfo(event.target.value); resetGenerated(); }} placeholder="例: 初回価格1,000円(税込)" /></label>
+                        <div className="priceModeRow">
+                          <button className={priceMode === "all" ? "active" : ""} type="button" disabled={!priceInfo.trim()} onClick={() => { setPriceMode("all"); resetGenerated(); }}>価格あり</button>
+                          <button className={priceMode === "mixed" ? "active" : ""} type="button" disabled={!priceInfo.trim()} onClick={() => { setPriceMode("mixed"); resetGenerated(); }}>混ぜる</button>
+                          <button className={priceMode === "none" ? "active" : ""} type="button" onClick={() => { setPriceMode("none"); resetGenerated(); }}>価格なし</button>
+                        </div>
+                        <small>
+                          {!priceInfo.trim()
+                            ? "価格欄が空なら、価格なしで作成します。"
+                            : priceMode === "all"
+                              ? "全候補に価格を入れます。価格訴求を強めたい時。"
+                              : priceMode === "mixed"
+                                ? "価格あり・なしを混ぜます。表現の幅を出したい時。"
+                                : "価格を入れません。世界観や訴求を優先したい時。"}
+                        </small>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="imageCreateShell">
+                      {imageSourceUrl ? (
+                        <div className="imageSourcePreview">
+                          <img src={imageSourceUrl} alt="選択した参考画像" />
+                          <div>
+                            <strong>{selectedImageSourceFile()?.displayName || selectedImageSourceFile()?.name || fileNameFromUrl(imageSourceUrl)}</strong>
+                            <button type="button" onClick={() => setImageSourcePickerOpen(true)}>選び直す</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button className="imageSourceSelectButton" type="button" onClick={() => setImageSourcePickerOpen(true)}>
+                          ライブラリから選ぶ
                         </button>
-                      ))}
+                      )}
+                      {imageSourceUrl ? (
+                        <>
+                          <button className="imageAnalysisStartButton" type="button" disabled={imageAnalysisBusy} onClick={analyzeImageSource}>
+                            {imageAnalysisBusy ? <span className="miniSpinner" aria-hidden="true" /> : null}
+                            {imageAnalysisBusy ? "構成分析中…" : imageAnalysis ? "もう一度分析する" : "構成分析開始"}
+                          </button>
+                          {imageAnalysisBusy ? (
+                            <div className="imageAnalysisLoading">
+                              <div className="spinner" />
+                              <div>
+                                <strong>構成を分析しています</strong>
+                                <p>レイアウト、訴求、色、文字、デザイン要素をCodexが分解中です。</p>
+                              </div>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {imageAnalysis ? (
+                        <div className="imageAnalysisPanel">
+                          {imageAnalysis.summary ? <p className="imageAnalysisSummary">{imageAnalysis.summary}</p> : null}
+                          <div className="imageAnalysisList">
+                            {imageAnalysis.items.map((item) => (
+                              <div className="imageAnalysisItem" key={item.id}>
+                                <div className="imageAnalysisItemHead">
+                                  <span>{item.category}</span>
+                                  <strong>{item.item}</strong>
+                                  <label>
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(item.locked)}
+                                      onChange={(event) => updateImageAnalysisItem(item.id, { locked: event.target.checked })}
+                                    />
+                                    固定
+                                  </label>
+                                </div>
+                                <textarea value={item.content} onChange={(event) => updateImageAnalysisItem(item.id, { content: event.target.value })} />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
-                  </div>
+                  )}
                 </div>
-              ) : <div className="empty small">商品が未登録です。「商品管理」で追加してください</div>}
 
-              <label className="mt">作りたいイメージ（任意）
-                <textarea value={direction} onChange={(event) => { setDirection(event.target.value); resetGenerated(); }} placeholder="例: 高級感を出したい、夏っぽく。空欄ならおまかせで作ります" />
-              </label>
+                {createMode === "product" ? (
+                  <>
+                    <div className="bannerCountBox mt">
+                      <label>作成数
+                        <select value={matchedPreset?.count || "custom"} onChange={(event) => { const found = bannerPresets.find((p) => String(p.count) === event.target.value); if (found) { setDivisions(found.divisions); setSheetRuns(found.sheetRuns); resetGenerated(); } }}>
+                          {bannerPresets.map((preset) => <option value={preset.count} key={preset.count}>{preset.count}パターン</option>)}
+                          {!matchedPreset ? <option value="custom">カスタム: {totalCandidates}パターン</option> : null}
+                        </select>
+                      </label>
+                    </div>
 
-              <div className={`priceBox mt ${priceInfo.trim() ? "hasPrice" : ""}`}>
-                <label>価格<input value={priceInfo} onChange={(event) => { setPriceInfo(event.target.value); resetGenerated(); }} placeholder="例: 初回価格1,000円(税込)" /></label>
-                <div className="priceModeRow">
-                  <button className={priceMode === "all" ? "active" : ""} type="button" disabled={!priceInfo.trim()} onClick={() => { setPriceMode("all"); resetGenerated(); }}>価格あり</button>
-                  <button className={priceMode === "mixed" ? "active" : ""} type="button" disabled={!priceInfo.trim()} onClick={() => { setPriceMode("mixed"); resetGenerated(); }}>混ぜる</button>
-                  <button className={priceMode === "none" ? "active" : ""} type="button" onClick={() => { setPriceMode("none"); resetGenerated(); }}>価格なし</button>
-                </div>
-                <small>
-                  {!priceInfo.trim()
-                    ? "価格欄が空なら、価格なしで作成します。"
-                    : priceMode === "all"
-                      ? "全候補に価格を入れます。価格訴求を強めたい時。"
-                      : priceMode === "mixed"
-                        ? "価格あり・なしを混ぜます。表現の幅を出したい時。"
-                        : "価格を入れません。世界観や訴求を優先したい時。"}
-                </small>
+                    <details className="advancedSettings">
+                      <summary>詳細設定</summary>
+                      <div className="controlGrid mt">
+                        <label>1回あたりの分割数
+                          <select value={divisions} onChange={(event) => { setDivisions(Number(event.target.value)); resetGenerated(); }}>
+                            <option value={1}>1分割</option><option value={2}>2分割</option><option value={4}>4分割</option>
+                          </select>
+                        </label>
+                        <label>生成回数<input min={1} max={100} type="number" value={sheetRuns} onChange={(event) => { setSheetRuns(Math.min(100, Math.max(1, Number(event.target.value) || 1))); resetGenerated(); }} /></label>
+                      </div>
+                      <div className="bulkBox mt">
+                        <label>1度での画像生成数
+                          <select value={imagesPerRequest} onChange={(event) => setImagesPerRequest(Math.min(2, Math.max(1, Number(event.target.value) || 1)))}>
+                            <option value={1}>1枚（推奨）</option>
+                            <option value={2}>2枚</option>
+                          </select>
+                        </label>
+                        <small>基本は1枚ずつ直列生成します。2枚は少しまとめたい時だけ。作成数が多いほど時間がかかります。</small>
+                      </div>
+                      <small className="settingHint">モデル・推論強度・速度は左下の「設定」でステップごとに調整できます。</small>
+                    </details>
+
+                    {busy ? (
+                      <button className="danger" type="button" style={{marginTop:8,width:"100%"}} disabled={stopping} onClick={stopGeneration}>{stopping ? "停止中…" : "生成を停止"}</button>
+                    ) : (
+                      <button className="primary" type="button" style={{marginTop:8,width:"100%"}} disabled={!selectedProduct} onClick={generateBanners}>バナーを作成する</button>
+                    )}
+                  </>
+                ) : null}
               </div>
-
-              <div className="bannerCountBox mt">
-                <label>作成数
-                  <select value={matchedPreset?.count || "custom"} onChange={(event) => { const found = bannerPresets.find((p) => String(p.count) === event.target.value); if (found) { setDivisions(found.divisions); setSheetRuns(found.sheetRuns); resetGenerated(); } }}>
-                    {bannerPresets.map((preset) => <option value={preset.count} key={preset.count}>{preset.count}パターン</option>)}
-                    {!matchedPreset ? <option value="custom">カスタム: {totalCandidates}パターン</option> : null}
-                  </select>
-                </label>
               </div>
-
-              <details className="advancedSettings">
-                <summary>詳細設定</summary>
-                <div className="controlGrid mt">
-                  <label>1回あたりの分割数
-                    <select value={divisions} onChange={(event) => { setDivisions(Number(event.target.value)); resetGenerated(); }}>
-                      <option value={1}>1分割</option><option value={2}>2分割</option><option value={4}>4分割</option>
-                    </select>
-                  </label>
-                  <label>生成回数<input min={1} max={100} type="number" value={sheetRuns} onChange={(event) => { setSheetRuns(Math.min(100, Math.max(1, Number(event.target.value) || 1))); resetGenerated(); }} /></label>
-                </div>
-                <div className="bulkBox mt">
-                  <label>1度での画像生成数
-                    <select value={imagesPerRequest} onChange={(event) => setImagesPerRequest(Math.min(2, Math.max(1, Number(event.target.value) || 1)))}>
-                      <option value={1}>1枚（推奨）</option>
-                      <option value={2}>2枚</option>
-                    </select>
-                  </label>
-                  <small>基本は1枚ずつ直列生成します。2枚は少しまとめたい時だけ。作成数が多いほど時間がかかります。</small>
-                </div>
-                <small className="settingHint">モデル・推論強度・速度は左下の「設定」でステップごとに調整できます。</small>
-              </details>
-
-              {busy ? (
-                <button className="danger" type="button" style={{marginTop:8,width:"100%"}} disabled={stopping} onClick={stopGeneration}>{stopping ? "停止中…" : "生成を停止"}</button>
-              ) : (
-                <button className="primary" type="button" style={{marginTop:8,width:"100%"}} disabled={!selectedProduct} onClick={generateBanners}>バナーを作成する</button>
-              )}
             </div>
+            <button className="folderResizeHandle generateSettingsResize" type="button" aria-label="作成設定の幅を変更" onPointerDown={startGenerateSettingsResize} />
 
             {/* Right side: candidates + inline library */}
             <div className="gen-right" style={{ "--gen-library-height": `${genLibraryHeight}px` } as React.CSSProperties}>
@@ -3117,6 +3320,59 @@ ${requestModeLabel}`,
                   {previewVariant.priceTreatment === "with_price" && <span className="priceChip">価格あり</span>}
                   <button className="primary" type="button" onClick={() => { quickSave(previewVariant); }}>ライブラリに保存</button>
                   <button type="button" onClick={() => setPreviewVariant(null)}>閉じる</button>
+                </div>
+              </div>
+            </div>
+          )}
+          {imageSourcePickerOpen && (
+            <div className="preview-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) { setHoverPreview(null); setImageSourcePickerOpen(false); } }}>
+              <div className="imageSourcePickerModal" onMouseDown={(event) => event.stopPropagation()}>
+                <div className="modalHead">
+                  <div>
+                    <h2>ライブラリから選ぶ</h2>
+                    <p>参考にする既存バナーを1枚選択します。</p>
+                  </div>
+                  <button type="button" onClick={() => { setHoverPreview(null); setImageSourcePickerOpen(false); }}>閉じる</button>
+                </div>
+                <div className="imageSourcePickerBody">
+                  <aside className="imageSourceFolderPane">
+                    <div className="folderTree">
+                      {saveTree ? renderImageSourceFolderNode(saveTree) : <div className="empty small">読み込み中</div>}
+                    </div>
+                  </aside>
+                  <section className="imageSourceListPane">
+                    <div className="libraryFilters">
+                      <div className="filterSearchBox">
+                        <input value={imageSourceSearch} onChange={(event) => setImageSourceSearch(event.target.value)} placeholder="画像名・プロンプトで検索" />
+                        {imageSourceSearch ? <button type="button" aria-label="検索をクリア" onClick={() => setImageSourceSearch("")}>×</button> : null}
+                      </div>
+                    </div>
+                    {imageSourcePickerFiles().length ? (
+                      <div className="imageSourceGrid">
+                        {imageSourcePickerFiles().map((item) => (
+                          <button
+                            className={imageSourceUrl === item.url ? "active" : ""}
+                            type="button"
+                            key={item.path}
+                            onClick={() => selectImageSource(item.url)}
+                            onDoubleClick={() => { selectImageSource(item.url); setHoverPreview(null); setImageSourcePickerOpen(false); }}
+                            onMouseEnter={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
+                            onMouseMove={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
+                            onMouseLeave={() => setHoverPreview(null)}
+                          >
+                            <img src={item.url} alt={item.displayName || item.name} />
+                            <span>{item.displayName || item.name.replace(/\.(png|jpe?g|webp)$/i, "")}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="empty">条件に合う画像がありません</div>
+                    )}
+                  </section>
+                </div>
+                <div className="imageSourcePickerActions">
+                  <button type="button" onClick={() => { setHoverPreview(null); setImageSourcePickerOpen(false); }}>キャンセル</button>
+                  <button className="primary" type="button" disabled={!imageSourceUrl} onClick={() => { setHoverPreview(null); setImageSourcePickerOpen(false); }}>この画像を使う</button>
                 </div>
               </div>
             </div>
