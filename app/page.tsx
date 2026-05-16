@@ -41,6 +41,13 @@ type Variant = {
 type Mode = "codex" | "local-fallback";
 type Tab = "generate" | "products" | "library" | "settings";
 type CreateMode = "product" | "image";
+type GenerateSettingsWidths = Record<CreateMode, number>;
+
+const DEFAULT_GENERATE_SETTINGS_WIDTHS: GenerateSettingsWidths = {
+  product: 520,
+  image: 680,
+};
+const GENERATE_SETTINGS_WIDTHS_STORAGE_KEY = "generateSettingsWidths";
 
 type ApiDebug = {
   step?: string;
@@ -149,6 +156,12 @@ type BannerAnalysisItem = {
   category: string;
   item: string;
   content: string;
+  bounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   locked?: boolean;
 };
 type BannerAnalysisResult = {
@@ -464,8 +477,30 @@ function revokePreview(row: NewImageRow) {
   if (row.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(row.previewUrl);
 }
 
+function normalizeGenerateSettingsWidths(value: Partial<GenerateSettingsWidths> | null | undefined): GenerateSettingsWidths {
+  return {
+    product: Math.min(900, Math.max(460, Number(value?.product) || DEFAULT_GENERATE_SETTINGS_WIDTHS.product)),
+    image: Math.min(980, Math.max(560, Number(value?.image) || DEFAULT_GENERATE_SETTINGS_WIDTHS.image)),
+  };
+}
+
+function loadGenerateSettingsWidths() {
+  if (typeof window === "undefined") return DEFAULT_GENERATE_SETTINGS_WIDTHS;
+  try {
+    return normalizeGenerateSettingsWidths(JSON.parse(window.localStorage.getItem(GENERATE_SETTINGS_WIDTHS_STORAGE_KEY) || "{}"));
+  } catch {
+    return DEFAULT_GENERATE_SETTINGS_WIDTHS;
+  }
+}
+
+function saveGenerateSettingsWidths(widths: GenerateSettingsWidths) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(GENERATE_SETTINGS_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("generate");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [brands, setBrands] = useState<Brand[]>(INITIAL_BRAND_OPTIONS.map((name, index) => ({ id: `initial-${index}`, name, createdAt: "" })));
   const [selectedProductId, setSelectedProductId] = useState("");
@@ -499,7 +534,7 @@ export default function Home() {
   const [libraryFolderWidth, setLibraryFolderWidth] = useState(340);
   const [libraryThumbSize, setLibraryThumbSize] = useState(72);
   const [genLibraryHeight, setGenLibraryHeight] = useState(300);
-  const [genSettingsWidth, setGenSettingsWidth] = useState(320);
+  const [genSettingsWidths, setGenSettingsWidths] = useState<GenerateSettingsWidths>(loadGenerateSettingsWidths);
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [orphanHistoryRecords, setOrphanHistoryRecords] = useState<HistoryRecord[]>([]);
   const [selectedHistoryId, setSelectedHistoryId] = useState("");
@@ -511,8 +546,11 @@ export default function Home() {
   const [imageSourceFolder, setImageSourceFolder] = useState("");
   const [imageSourceSearch, setImageSourceSearch] = useState("");
   const [imageSourceUrl, setImageSourceUrl] = useState("");
+  const [imageCreateMode, setImageCreateMode] = useState<"edit" | "reuse">("reuse");
+  const [imageCreateAspectRatio, setImageCreateAspectRatio] = useState("1024x1024");
   const [imageAnalysis, setImageAnalysis] = useState<BannerAnalysisResult | null>(null);
   const [imageAnalysisBusy, setImageAnalysisBusy] = useState(false);
+  const [hoveredAnalysisItemId, setHoveredAnalysisItemId] = useState("");
   const [editInstruction, setEditInstruction] = useState("");
   const [finalEditInstruction, setFinalEditInstruction] = useState("");
   const [aspectRatio, setAspectRatio] = useState("1024x1024");
@@ -564,6 +602,8 @@ export default function Home() {
   const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelectionState>({ active: false, startX: 0, startY: 0, currentX: 0, currentY: 0 });
 
   const selectedProduct = products.find((product) => product.id === selectedProductId) || products[0];
+  const hoveredAnalysisItem = imageAnalysis?.items.find((item) => item.id === hoveredAnalysisItemId) || null;
+  const genSettingsWidth = genSettingsWidths[createMode] || DEFAULT_GENERATE_SETTINGS_WIDTHS[createMode];
   const totalCandidates = divisions * sheetRuns;
   const generationTotal = totalCandidates;
   const matchedPreset = bannerPresets.find((preset) => preset.count === totalCandidates && preset.divisions === divisions && preset.sheetRuns === sheetRuns);
@@ -1015,6 +1055,14 @@ export default function Home() {
     setSelectedHistoryId("");
     setEditInstruction("");
     resetFinalOnly();
+  }
+
+  function clearHistoryDisplay() {
+    resetGenerated();
+    setSelectedHistoryId("");
+    if (typeof window !== "undefined") window.localStorage.removeItem("lastGenerationHistoryId");
+    setStatus("新規作成画面に戻しました");
+    addLog({ level: "info", title: "履歴表示をクリア", detail: "過去の生成結果の表示を消して、新規作成画面に戻しました" });
   }
 
   function clearCropSelection() {
@@ -1909,6 +1957,7 @@ ${requestModeLabel}`,
   function selectImageSource(url: string) {
     setImageSourceUrl(url);
     setImageAnalysis(null);
+    setHoveredAnalysisItemId("");
   }
 
   async function analyzeImageSource() {
@@ -2420,9 +2469,16 @@ ${requestModeLabel}`,
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = genSettingsWidth;
+    const resizingMode = createMode;
     const onMove = (moveEvent: PointerEvent) => {
-      const next = Math.min(560, Math.max(280, startWidth + moveEvent.clientX - startX));
-      setGenSettingsWidth(next);
+      const viewportMax = Math.max(760, window.innerWidth - 560);
+      const minWidth = resizingMode === "image" ? 560 : 460;
+      const next = Math.min(viewportMax, Math.max(minWidth, startWidth + moveEvent.clientX - startX));
+      setGenSettingsWidths((current) => {
+        const updated = { ...current, [resizingMode]: next };
+        saveGenerateSettingsWidths(updated);
+        return updated;
+      });
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -2899,23 +2955,52 @@ ${requestModeLabel}`,
   const libraryDetailItems = selectedLibraryDetails();
 
   return (
-    <div className="app">
+    <div className={`app ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
       {/* ===== Sidebar ===== */}
       <aside className="sidebar">
-        <div className="sidebar-brand">バナー作成ツール</div>
+        <div className="sidebarTop">
+          <div className="sidebar-brand">
+            <img className="brandMark" src="/assets/banner-sakusei-kun.png" alt="" aria-hidden="true" />
+            <span className="sidebarText">バナー作成君</span>
+          </div>
+          <button
+            className="sidebarToggle"
+            type="button"
+            aria-label={sidebarCollapsed ? "メニューを開く" : "メニューを閉じる"}
+            title={sidebarCollapsed ? "メニューを開く" : "メニューを閉じる"}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d={sidebarCollapsed ? "M9 6l6 6-6 6" : "M15 6l-6 6 6 6"} /></svg>
+          </button>
+        </div>
         <nav className="sidebar-nav">
-          <button className={tab === "generate" ? "active" : ""} type="button" onClick={() => setTab("generate")}>バナー作成</button>
-          <button className={tab === "library" ? "active" : ""} type="button" onClick={() => setTab("library")}>ライブラリ</button>
-          <button className={tab === "products" ? "active" : ""} type="button" onClick={() => setTab("products")}>商品管理</button>
+          <button className={tab === "generate" ? "active" : ""} type="button" title="バナー作成" data-label="バナー作成" onClick={() => setTab("generate")}>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><rect x="4" y="5" width="12" height="10" rx="1.5" /><path d="M7 9h5M7 12h3" /><path d="M15 18l4.5-4.5 1.8 1.8L16.8 20H15v-2Z" /><path d="M18.5 5.5v4M16.5 7.5h4" /></svg>
+            <span className="sidebarText">バナー作成</span>
+          </button>
+          <button className={tab === "library" ? "active" : ""} type="button" title="ライブラリ" data-label="ライブラリ" onClick={() => setTab("library")}>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" /><path d="M4 11h16" /></svg>
+            <span className="sidebarText">ライブラリ</span>
+          </button>
+          <button className={tab === "products" ? "active" : ""} type="button" title="商品管理" data-label="商品管理" onClick={() => setTab("products")}>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4.5 7.5 11 4l6.5 3.5L11 11 4.5 7.5Z" /><path d="M4.5 7.5v7L11 18l6.5-3.5v-7" /><path d="M11 11v7" /><path d="M17 16c1.7 0 3 .6 3 1.3v2.4c0 .7-1.3 1.3-3 1.3s-3-.6-3-1.3v-2.4c0-.7 1.3-1.3 3-1.3Z" /><path d="M14 17.3c0 .7 1.3 1.3 3 1.3s3-.6 3-1.3" /></svg>
+            <span className="sidebarText">商品管理</span>
+          </button>
         </nav>
         <div className="sidebar-footer">
-          <button className={tab === "settings" ? "active sidebarSettingsButton" : "sidebarSettingsButton"} type="button" onClick={() => setTab("settings")}>設定</button>
-          <button type="button" disabled={busy} onClick={checkCodex}>接続テスト</button>
-          <div className="status">{busy ? `処理中: ${status}` : status}</div>
-          <div className="notifyStatus">
+          <button className={tab === "settings" ? "active sidebarSettingsButton" : "sidebarSettingsButton"} type="button" title="設定" data-label="設定" onClick={() => setTab("settings")}>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19 12a7.5 7.5 0 0 0-.1-1.2l2-1.5-2-3.5-2.4 1a7.3 7.3 0 0 0-2-1.2L14.2 3h-4.4l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.5 2 1.5A7.5 7.5 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.5 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.5-2-1.5c.1-.4.1-.8.1-1.2Z" /></svg>
+            <span className="sidebarText">設定</span>
+          </button>
+          <button type="button" disabled={busy} title="接続テスト" data-label="接続テスト" onClick={checkCodex}>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 12a5 5 0 0 1 5-5h2" /><path d="M17 12a5 5 0 0 1-5 5h-2" /><path d="M13 7l2-2-2-2" /><path d="M11 17l-2 2 2 2" /></svg>
+            <span className="sidebarText">接続テスト</span>
+          </button>
+          <div className="status sidebarDetail">{busy ? `処理中: ${status}` : status}</div>
+          <div className="notifyStatus sidebarDetail">
             通知: {notificationPermission === "granted" ? "ON" : notificationPermission === "denied" ? "拒否中" : "初回生成時に確認"}
           </div>
-          <div className="rateLimitStatus">
+          <div className="rateLimitStatus sidebarDetail">
             <div className="rateLimitTitle"><span>残りのレート制限</span>{rateLimitInfo?.planType && <em>{rateLimitInfo.planType}</em>}</div>
             {rateLimitInfo?.reachedType && <div className="rateLimitWarning">制限に到達: {rateLimitInfo.reachedType}</div>}
             {rateLimitInfo?.primary || rateLimitInfo?.secondary ? (
@@ -2935,8 +3020,11 @@ ${requestModeLabel}`,
             ) : <span className="rateLimitEmpty">未取得</span>}
           </div>
           <div className="sidebarLog">
-            <button type="button" onClick={() => setDebugOpen((value) => !value)}>{debugOpen ? "ログを閉じる" : "ログを見る"}</button>
-            {debugOpen && (
+            <button type="button" title="ログを見る" data-label="ログを見る" onClick={() => setDebugOpen((value) => !value)}>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>
+              <span className="sidebarText">{debugOpen ? "ログを閉じる" : "ログを見る"}</span>
+            </button>
+            {debugOpen && !sidebarCollapsed && (
               <div className="logList sidebarLogList">
                 {logs.map((log) => (
                   <div className={`logItem ${log.level}`} key={log.id}>
@@ -2963,14 +3051,24 @@ ${requestModeLabel}`,
       {/* ===== Generate tab ===== */}
       {tab === "generate" ? (
         <>
-          <div className="main-header"><div><h1>バナー作成</h1></div></div>
+          <div className="main-header"><div><h1>バナー作成君</h1></div></div>
           <div className="historyBar generateHistoryTop">
-            <label>過去の作成結果
-              <select value={selectedHistoryId} onChange={(event) => { if (event.target.value) loadHistoryRecord(event.target.value); else { setSelectedHistoryId(""); } }}>
-                <option value="">過去の結果を読み込む</option>
-                {historyRecords.map((record) => <option value={record.id} key={record.id}>{historyLabel(record)}</option>)}
-              </select>
-            </label>
+            <div className="historySelectGroup">
+              <label>過去の作成結果
+                <select value={selectedHistoryId} onChange={(event) => { if (event.target.value) loadHistoryRecord(event.target.value); else { setSelectedHistoryId(""); } }}>
+                  <option value="">過去の結果を読み込む</option>
+                  {historyRecords.map((record) => <option value={record.id} key={record.id}>{historyLabel(record)}</option>)}
+                </select>
+              </label>
+              <button
+                className="historyClearButton"
+                type="button"
+                disabled={busy || (!selectedHistoryId && !sheetUrls.length && !sheetVariants.length && !finalUrl)}
+                onClick={clearHistoryDisplay}
+              >
+                クリア
+              </button>
+            </div>
           </div>
           <div className="gen-layout" style={{ "--settings-width": `${genSettingsWidth}px` } as React.CSSProperties}>
             {/* Settings panel */}
@@ -3000,7 +3098,7 @@ ${requestModeLabel}`,
                     <span>画像から作る</span>
                   </button>
                 </div>
-              <div className="createModePanel">
+              <div className={`createModePanel ${createMode === "image" ? "imageMode" : ""}`}>
                 <div className="createModeContent">
                   {createMode === "product" ? (
                     <>
@@ -3075,60 +3173,164 @@ ${requestModeLabel}`,
                     </>
                   ) : (
                     <div className="imageCreateShell">
-                      {imageSourceUrl ? (
-                        <div className="imageSourcePreview">
-                          <img src={imageSourceUrl} alt="選択した参考画像" />
-                          <div>
-                            <strong>{selectedImageSourceFile()?.displayName || selectedImageSourceFile()?.name || fileNameFromUrl(imageSourceUrl)}</strong>
-                            <button type="button" onClick={() => setImageSourcePickerOpen(true)}>選び直す</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button className="imageSourceSelectButton" type="button" onClick={() => setImageSourcePickerOpen(true)}>
-                          ライブラリから選ぶ
-                        </button>
-                      )}
-                      {imageSourceUrl ? (
-                        <>
-                          <button className="imageAnalysisStartButton" type="button" disabled={imageAnalysisBusy} onClick={analyzeImageSource}>
-                            {imageAnalysisBusy ? <span className="miniSpinner" aria-hidden="true" /> : null}
-                            {imageAnalysisBusy ? "構成分析中…" : imageAnalysis ? "もう一度分析する" : "構成分析開始"}
-                          </button>
-                          {imageAnalysisBusy ? (
-                            <div className="imageAnalysisLoading">
-                              <div className="spinner" />
-                              <div>
-                                <strong>構成を分析しています</strong>
-                                <p>レイアウト、訴求、色、文字、デザイン要素をCodexが分解中です。</p>
+                      <div className="imageModeLeftPane">
+                        {imageSourceUrl ? (
+                          <>
+                            <div className="imageSourcePreview">
+                              <div className="imageSourcePreviewFrame">
+                                <img src={imageSourceUrl} alt="選択した参考画像" />
+                                {hoveredAnalysisItem?.bounds ? (
+                                  <div
+                                    className="analysisBoundsOverlay"
+                                    style={{
+                                      left: `${hoveredAnalysisItem.bounds.x * 100}%`,
+                                      top: `${hoveredAnalysisItem.bounds.y * 100}%`,
+                                      width: `${hoveredAnalysisItem.bounds.width * 100}%`,
+                                      height: `${hoveredAnalysisItem.bounds.height * 100}%`,
+                                    } as React.CSSProperties}
+                                  >
+                                    <span>{hoveredAnalysisItem.item}</span>
+                                  </div>
+                                ) : null}
+                              </div>
+                              <div className="imageSourcePreviewMeta">
+                                <strong>{selectedImageSourceFile()?.displayName || selectedImageSourceFile()?.name || fileNameFromUrl(imageSourceUrl)}</strong>
+                                <button type="button" onClick={() => setImageSourcePickerOpen(true)}>選び直す</button>
                               </div>
                             </div>
-                          ) : null}
-                        </>
-                      ) : null}
-                      {imageAnalysis ? (
-                        <div className="imageAnalysisPanel">
-                          {imageAnalysis.summary ? <p className="imageAnalysisSummary">{imageAnalysis.summary}</p> : null}
-                          <div className="imageAnalysisList">
-                            {imageAnalysis.items.map((item) => (
-                              <div className="imageAnalysisItem" key={item.id}>
-                                <div className="imageAnalysisItemHead">
-                                  <span>{item.category}</span>
-                                  <strong>{item.item}</strong>
-                                  <label>
-                                    <input
-                                      type="checkbox"
-                                      checked={Boolean(item.locked)}
-                                      onChange={(event) => updateImageAnalysisItem(item.id, { locked: event.target.checked })}
-                                    />
-                                    固定
-                                  </label>
-                                </div>
-                                <textarea value={item.content} onChange={(event) => updateImageAnalysisItem(item.id, { content: event.target.value })} />
-                              </div>
-                            ))}
+                            <div className="imageAnalysisNextStep">
+                              <button className="imageAnalysisStartButton" type="button" disabled={imageAnalysisBusy} onClick={analyzeImageSource}>
+                                {imageAnalysisBusy ? <span className="miniSpinner" aria-hidden="true" /> : null}
+                                {imageAnalysisBusy ? "分析中..." : "構成を分析する"}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <button className="imageSourceSelectButton" type="button" onClick={() => setImageSourcePickerOpen(true)}>
+                            ライブラリから選ぶ
+                          </button>
+                        )}
+                        <div className="imageModeSettings">
+                          <div>
+                            <span>モード</span>
+                            <div className="imageModeSegment">
+                              <button
+                                className={imageCreateMode === "reuse" ? "active" : ""}
+                                type="button"
+                                title="構図やテイストを参考にして、新しい別案を作ります"
+                                onClick={() => setImageCreateMode("reuse")}
+                              >
+                                構成流用
+                              </button>
+                              <button
+                                className={imageCreateMode === "edit" ? "active" : ""}
+                                type="button"
+                                title="選んだ画像をなるべく維持して、部分修正します"
+                                onClick={() => setImageCreateMode("edit")}
+                              >
+                                画像編集
+                              </button>
+                            </div>
+                            <small className="imageModeHelp">
+                              {imageCreateMode === "reuse"
+                                ? "既存バナーの型を借りて、別案を作る。"
+                                : "この画像を元に、文字や見た目を直す。"}
+                            </small>
+                          </div>
+                          <label>生成比率
+                            <select value={imageCreateAspectRatio} onChange={(event) => setImageCreateAspectRatio(event.target.value)}>
+                              <option value="1024x1024">1:1</option>
+                              <option value="1536x1024">3:2</option>
+                              <option value="1024x1536">2:3</option>
+                              <option value="1792x1024">16:9</option>
+                              <option value="1024x1792">9:16</option>
+                              <option value="1536x864">横長</option>
+                              <option value="864x1536">縦長</option>
+                            </select>
+                          </label>
+                          <div className="bannerCountBox imageCountBox">
+                            <label>作成数
+                              <select value={matchedPreset?.count || "custom"} onChange={(event) => { const found = bannerPresets.find((p) => String(p.count) === event.target.value); if (found) { setDivisions(found.divisions); setSheetRuns(found.sheetRuns); resetGenerated(); } }}>
+                                {bannerPresets.map((preset) => <option value={preset.count} key={preset.count}>{preset.count}パターン</option>)}
+                                {!matchedPreset ? <option value="custom">カスタム: {totalCandidates}パターン</option> : null}
+                              </select>
+                            </label>
+                          </div>
+                          <details className="advancedSettings imageAdvancedSettings">
+                            <summary>詳細設定</summary>
+                            <div className="controlGrid mt">
+                              <label>1回あたりの分割数
+                                <select value={divisions} onChange={(event) => { setDivisions(Number(event.target.value)); resetGenerated(); }}>
+                                  <option value={1}>1分割</option><option value={2}>2分割</option><option value={4}>4分割</option>
+                                </select>
+                              </label>
+                              <label>生成回数<input min={1} max={100} type="number" value={sheetRuns} onChange={(event) => { setSheetRuns(Math.min(100, Math.max(1, Number(event.target.value) || 1))); resetGenerated(); }} /></label>
+                            </div>
+                            <div className="bulkBox mt">
+                              <label>1度での画像生成数
+                                <select value={imagesPerRequest} onChange={(event) => setImagesPerRequest(Math.min(2, Math.max(1, Number(event.target.value) || 1)))}>
+                                  <option value={1}>1枚（推奨）</option>
+                                  <option value={2}>2枚</option>
+                                </select>
+                              </label>
+                              <small>基本は1枚ずつ直列生成します。多めに作る時も止まりにくい設定です。</small>
+                            </div>
+                          </details>
+                          <button className="primary imageGenerateButton" type="button" disabled>
+                            {imageSourceUrl ? "生成準備中" : "画像を選んでください"}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="imageModeAnalysisPane">
+                        <div className="imageAnalysisWorkspaceHeader compact">
+                          <div>
+                            <h2>構成分析</h2>
+                            <p>{imageAnalysis ? "項目にカーソルを合わせると、左の画像上で該当範囲を確認できます。" : "画像を選んで構成分析を始めると、ここに結果が出ます。"}</p>
                           </div>
                         </div>
-                      ) : null}
+                        {imageAnalysisBusy ? (
+                          <div className="imageAnalysisLoading">
+                            <div className="spinner" />
+                            <div>
+                              <strong>構成を分析しています</strong>
+                              <p>コピー、価格、商品、装飾、色、レイアウトを分解中です。</p>
+                            </div>
+                          </div>
+                        ) : null}
+                        {imageAnalysis ? (
+                          <div className="imageAnalysisPanel workspace">
+                            {imageAnalysis.summary ? <p className="imageAnalysisSummary">{imageAnalysis.summary}</p> : null}
+                            <div className="imageAnalysisList">
+                              {imageAnalysis.items.map((item) => (
+                                <div
+                                  className={`imageAnalysisItem ${hoveredAnalysisItemId === item.id ? "active" : ""}`}
+                                  key={item.id}
+                                  onMouseEnter={() => setHoveredAnalysisItemId(item.id)}
+                                  onMouseLeave={() => setHoveredAnalysisItemId("")}
+                                  onFocus={() => setHoveredAnalysisItemId(item.id)}
+                                  onBlur={() => setHoveredAnalysisItemId("")}
+                                >
+                                  <div className="imageAnalysisItemHead">
+                                    <span>{item.category}</span>
+                                    <strong>{item.item}</strong>
+                                    <label>
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(item.locked)}
+                                        onChange={(event) => updateImageAnalysisItem(item.id, { locked: event.target.checked })}
+                                      />
+                                      固定
+                                    </label>
+                                  </div>
+                                  <textarea value={item.content} onChange={(event) => updateImageAnalysisItem(item.id, { content: event.target.value })} />
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="empty tall">{imageSourceUrl ? "左の「構成を分析する」で結果を表示します" : "画像を選ぶと、ここで構成分析できます"}</div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

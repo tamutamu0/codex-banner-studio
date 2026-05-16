@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./styles.css";
 
 export const metadata: Metadata = {
-  title: "Image Batch Prototype",
-  description: "Small internal prototype for contact-sheet image generation.",
+  title: "バナー作成君",
+  description: "バナー作成君",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
