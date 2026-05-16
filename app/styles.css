@@ -790,6 +790,17 @@ textarea { min-height: 72px; resize: vertical }
   gap: 10px;
   padding: 12px;
 }
+.analysisBulkActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.analysisBulkActions button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .imageModeAnalysisPane .imageAnalysisPanel {
   min-height: 0;
 }
@@ -836,10 +847,20 @@ textarea { min-height: 72px; resize: vertical }
   background: var(--panel);
   transition: border-color var(--tr), background var(--tr), box-shadow var(--tr);
 }
+.imageAnalysisItem.selected {
+  border-color: rgba(37,99,235,.54);
+  background: #f5f9ff;
+  box-shadow: inset 0 0 0 1px rgba(37,99,235,.12);
+}
 .imageAnalysisItem.active {
   border-color: rgba(37,99,235,.44);
   background: var(--accent-bg);
   box-shadow: inset 0 0 0 1px rgba(37,99,235,.08);
+}
+.imageAnalysisItem.selected.active {
+  border-color: rgba(37,99,235,.72);
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px rgba(37,99,235,.18), 0 8px 20px rgba(37,99,235,.08);
 }
 .imageAnalysisItemHead {
   display: grid;
@@ -869,13 +890,26 @@ textarea { min-height: 72px; resize: vertical }
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-height: 24px;
+  padding: 0 8px 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raised);
   color: var(--sub);
   font-size: 11px;
+  font-weight: 700;
   white-space: nowrap;
+  transition: border-color var(--tr), background var(--tr), color var(--tr);
+}
+.imageAnalysisItem.selected .imageAnalysisItemHead label {
+  border-color: rgba(37,99,235,.45);
+  background: var(--accent);
+  color: #fff;
 }
 .imageAnalysisItemHead input {
   width: auto;
   box-shadow: none;
+  accent-color: var(--accent);
 }
 .imageAnalysisItem textarea {
   min-height: 96px;

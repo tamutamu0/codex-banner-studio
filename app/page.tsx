@@ -156,6 +156,7 @@ type BannerAnalysisItem = {
   category: string;
   item: string;
   content: string;
+  originalContent?: string;
   bounds?: {
     x: number;
     y: number;
@@ -603,6 +604,7 @@ export default function Home() {
 
   const selectedProduct = products.find((product) => product.id === selectedProductId) || products[0];
   const hoveredAnalysisItem = imageAnalysis?.items.find((item) => item.id === hoveredAnalysisItemId) || null;
+  const checkedAnalysisCount = imageAnalysis?.items.filter((item) => item.locked).length || 0;
   const genSettingsWidth = genSettingsWidths[createMode] || DEFAULT_GENERATE_SETTINGS_WIDTHS[createMode];
   const totalCandidates = divisions * sheetRuns;
   const generationTotal = totalCandidates;
@@ -1977,7 +1979,14 @@ ${requestModeLabel}`,
         },
         codexSettings: stepCodexSettings.ideas,
       });
-      setImageAnalysis(result);
+      setImageAnalysis({
+        ...result,
+        items: result.items.map((item) => ({
+          ...item,
+          originalContent: item.originalContent || item.content,
+          locked: imageCreateMode === "reuse",
+        })),
+      });
       setStatus("画像の分解が完了しました");
       addLog({ level: "success", title: "画像分解完了", detail: `${result.items.length}項目` });
     } catch (error) {
@@ -1993,6 +2002,169 @@ ${requestModeLabel}`,
     setImageAnalysis((current) => current
       ? { ...current, items: current.items.map((item) => item.id === id ? { ...item, ...patch } : item) }
       : current);
+  }
+
+  function switchImageCreateMode(nextMode: "edit" | "reuse") {
+    setImageCreateMode(nextMode);
+    setImageAnalysis((current) => current
+      ? {
+        ...current,
+        items: current.items.map((item) => ({
+          ...item,
+          locked: nextMode === "reuse" ? true : item.content !== (item.originalContent || item.content),
+        })),
+      }
+      : current);
+  }
+
+  function updateImageAnalysisContent(id: string, content: string) {
+    updateImageAnalysisItem(id, imageCreateMode === "edit" ? { content, locked: true } : { content });
+  }
+
+  function setAllImageAnalysisChecks(checked: boolean) {
+    setImageAnalysis((current) => current
+      ? { ...current, items: current.items.map((item) => ({ ...item, locked: checked })) }
+      : current);
+  }
+
+  async function generateImageModeBanners() {
+    if (!imageSourceUrl) {
+      setStatus("参考画像を選んでください");
+      return;
+    }
+    if (!imageAnalysis) {
+      setStatus("先に構成を分析してください");
+      return;
+    }
+    const checkedItems = imageAnalysis.items.filter((item) => item.locked);
+    if (!checkedItems.length) {
+      setStatus(imageCreateMode === "reuse" ? "引き継ぐ項目を選んでください" : "変更する項目を選んでください");
+      return;
+    }
+    const sourceFile = selectedImageSourceFile();
+    const sourceProductInput = productInputForLibraryUrl(imageSourceUrl);
+    const targetCount = generationTotal;
+    const chunkDivision = divisions;
+    const plannedSheets = Math.ceil(targetCount / chunkDivision);
+    const requestImageCount = Math.min(2, Math.max(1, imagesPerRequest));
+    const historyId = makeClientId("image-project");
+    const cancelKey = `image-generation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    type ImageSheetResponse = { sheetUrl: string; variants: Variant[]; mode: Mode; debug?: ApiDebug; runIndex: number };
+    const generatedSheetUrls: string[] = [];
+    const generatedVariants: Variant[] = [];
+    let sheetOffset = 0;
+    let variantOffset = 0;
+    let lastHistorySaveSheetCount = 0;
+    setBusy(true);
+    setStopping(false);
+    stopRequestedRef.current = false;
+    activeCancelKeyRef.current = cancelKey;
+    activeAbortRef.current = new AbortController();
+    void ensureDesktopNotificationPermission();
+    resetGenerated();
+    setStatus(imageCreateMode === "reuse" ? "構成を流用して作成中…" : "元画像を部分編集して作成中…");
+    startProgress(imageCreateMode === "reuse" ? "画像から作成中" : "画像を編集生成中", `画像を生成しています… 0/${plannedSheets}シート`, plannedSheets);
+    addLog({
+      level: "info",
+      title: imageCreateMode === "reuse" ? "画像から作成開始: 構成流用" : "画像から作成開始: 画像編集",
+      detail: `source=${imageSourceUrl}
+mode=${imageCreateMode}
+checked=${checkedItems.length}/${imageAnalysis.items.length}
+aspect=${imageCreateAspectRatio}
+count=${targetCount}`,
+    });
+    try {
+      while (variantOffset < targetCount) {
+        if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
+        const remaining = targetCount - variantOffset;
+        const currentDivisions = remaining < chunkDivision ? remaining : chunkDivision;
+        const remainingSheets = Math.ceil(remaining / currentDivisions);
+        const currentSheetRuns = Math.min(requestImageCount, remainingSheets);
+        const take = currentDivisions * currentSheetRuns;
+        const result = await postJson<{ sheets: ImageSheetResponse[]; mode: Mode; debug?: ApiDebug }>("/api/image-sheets", {
+          input: sourceProductInput,
+          sourceImageUrl: imageSourceUrl,
+          sourceFileName: sourceFile?.displayName || sourceFile?.name || fileNameFromUrl(imageSourceUrl),
+          sourceMeta: {
+            generationPrompt: sourceFile?.generationPrompt || sourceFile?.stylePrompt || "",
+            editInstruction: sourceFile?.editInstruction || "",
+            aspectRatio: sourceFile?.aspectRatio || "",
+          },
+          createMode: imageCreateMode,
+          analysisSummary: imageAnalysis.summary || "",
+          analysisItems: imageAnalysis.items,
+          aspectRatio: imageCreateAspectRatio,
+          startIndex: variantOffset + 1,
+          divisions: currentDivisions,
+          sheetRuns: currentSheetRuns,
+          cancelKey,
+          codexSettings: stepCodexSettings.sheets,
+        }, activeAbortRef.current?.signal);
+        if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
+        const chunkSheets = result.sheets.sort((a, b) => a.runIndex - b.runIndex).map((sheet) => ({
+          ...sheet,
+          runIndex: sheet.runIndex + sheetOffset,
+          variants: sheet.variants.map((variant) => ({
+            ...variant,
+            sheetRun: (variant.sheetRun || sheet.runIndex) + sheetOffset,
+            globalIndex: (variant.globalIndex || variant.index) + variantOffset,
+          })),
+        }));
+        generatedSheetUrls.push(...chunkSheets.map((sheet) => sheet.sheetUrl));
+        generatedVariants.push(...chunkSheets.flatMap((sheet) => sheet.variants));
+        const partialVariants = generatedVariants.slice(0, targetCount);
+        setSheetUrls([...generatedSheetUrls]);
+        setSheetVariants(partialVariants);
+        variantOffset += take;
+        sheetOffset += currentSheetRuns;
+        if (sheetOffset === currentSheetRuns || sheetOffset - lastHistorySaveSheetCount >= HISTORY_UPDATE_SHEET_INTERVAL || variantOffset >= targetCount) {
+          try {
+            const partialRecord = await saveGenerationHistory(sourceProductInput, partialVariants, generatedSheetUrls, historyId);
+            lastHistorySaveSheetCount = sheetOffset;
+            addLog({ level: "success", title: "画像作成履歴を更新", detail: `${historyLabel(partialRecord)}\n途中結果=${partialVariants.length}/${targetCount}候補` });
+          } catch (historyError) {
+            addLog({ level: "warn", title: "画像作成履歴の途中保存に失敗", detail: historyError instanceof Error ? historyError.message : String(historyError) });
+          }
+        }
+        updateProgress({ current: sheetOffset, detail: `画像を生成しています… ${Math.min(sheetOffset, plannedSheets)}/${plannedSheets}シート` });
+        addLog({ level: "success", title: "画像モード生成チャンク完了", detail: `シート=${sheetOffset}/${plannedSheets}\n候補=${Math.min(variantOffset, targetCount)}/${targetCount}\n${formatDebug(result.debug)}` });
+        await yieldToBrowser();
+      }
+      if (!generatedSheetUrls.length) throw new Error("画像生成がすべて失敗しました。詳細は実行状況を確認してください。");
+      const allVariants = generatedVariants.slice(0, targetCount);
+      setSheetUrls([...generatedSheetUrls]);
+      setSheetVariants(allVariants);
+      const record = await saveGenerationHistory(sourceProductInput, allVariants, generatedSheetUrls, historyId);
+      setStatus(`${allVariants.length}パターン完成！ 良いものを選んでください`);
+      finishProgress("作成完了", `${allVariants.length}パターンできました`);
+      addLog({ level: "success", title: "画像モード生成完了", detail: `${historyLabel(record)}\n候補=${allVariants.length}` });
+      notifyDesktop("画像から作成完了", `${allVariants.length}パターンできました`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (stopRequestedRef.current || message.includes("abort") || message.includes("停止")) {
+        const partialVariants = generatedVariants.slice(0, targetCount);
+        if (partialVariants.length || generatedSheetUrls.length) {
+          try {
+            await saveGenerationHistory(sourceProductInput, partialVariants, generatedSheetUrls, historyId);
+          } catch (historyError) {
+            addLog({ level: "warn", title: "停止時の画像作成履歴保存に失敗", detail: historyError instanceof Error ? historyError.message : String(historyError) });
+          }
+        }
+        setStatus("停止しました。途中までの候補は残しています");
+        finishProgress("停止しました", "途中までできた候補はそのまま残しています");
+        addLog({ level: "warn", title: "画像モード生成停止", detail: message });
+      } else {
+        setStatus("画像から作成でエラーが発生しました");
+        finishProgress("エラー", message);
+        addLog({ level: "error", title: "画像モード生成エラー", detail: message });
+        notifyDesktop("画像から作成エラー", message);
+      }
+    } finally {
+      setBusy(false);
+      setStopping(false);
+      activeCancelKeyRef.current = "";
+      activeAbortRef.current = null;
+    }
   }
 
   function savedSourceUrls() {
@@ -3218,7 +3390,7 @@ ${requestModeLabel}`,
                                 className={imageCreateMode === "reuse" ? "active" : ""}
                                 type="button"
                                 title="構図やテイストを参考にして、新しい別案を作ります"
-                                onClick={() => setImageCreateMode("reuse")}
+                                onClick={() => switchImageCreateMode("reuse")}
                               >
                                 構成流用
                               </button>
@@ -3226,15 +3398,15 @@ ${requestModeLabel}`,
                                 className={imageCreateMode === "edit" ? "active" : ""}
                                 type="button"
                                 title="選んだ画像をなるべく維持して、部分修正します"
-                                onClick={() => setImageCreateMode("edit")}
+                                onClick={() => switchImageCreateMode("edit")}
                               >
                                 画像編集
                               </button>
                             </div>
                             <small className="imageModeHelp">
                               {imageCreateMode === "reuse"
-                                ? "既存バナーの型を借りて、別案を作る。"
-                                : "この画像を元に、文字や見た目を直す。"}
+                                ? "チェックした構成要素を使って、別バリエーションを新しく作る。"
+                                : "元画像をベースに、チェックした部分だけ編集する。"}
                             </small>
                           </div>
                           <label>生成比率
@@ -3276,8 +3448,16 @@ ${requestModeLabel}`,
                               <small>基本は1枚ずつ直列生成します。多めに作る時も止まりにくい設定です。</small>
                             </div>
                           </details>
-                          <button className="primary imageGenerateButton" type="button" disabled>
-                            {imageSourceUrl ? "生成準備中" : "画像を選んでください"}
+                          <button className="primary imageGenerateButton" type="button" disabled={busy || !imageSourceUrl || !imageAnalysis || !checkedAnalysisCount} onClick={generateImageModeBanners}>
+                            {!imageSourceUrl
+                              ? "画像を選んでください"
+                              : !imageAnalysis
+                                ? "構成分析後に作成"
+                                : !checkedAnalysisCount
+                                  ? imageCreateMode === "reuse" ? "引き継ぐ項目を選んでください" : "変更項目を選んでください"
+                                : imageCreateMode === "reuse"
+                                  ? "別バリエーションを作成する"
+                                  : "部分編集で作成する"}
                           </button>
                         </div>
                       </div>
@@ -3287,6 +3467,14 @@ ${requestModeLabel}`,
                             <h2>構成分析</h2>
                             <p>{imageAnalysis ? "項目にカーソルを合わせると、左の画像上で該当範囲を確認できます。" : "画像を選んで構成分析を始めると、ここに結果が出ます。"}</p>
                           </div>
+                          {imageAnalysis ? (
+                            <div className="analysisBulkActions">
+                              <button type="button" onClick={() => setAllImageAnalysisChecks(true)}>
+                                {imageCreateMode === "reuse" ? "すべて引き継ぐ" : "すべて変更する"}
+                              </button>
+                              <button type="button" onClick={() => setAllImageAnalysisChecks(false)}>すべて外す</button>
+                            </div>
+                          ) : null}
                         </div>
                         {imageAnalysisBusy ? (
                           <div className="imageAnalysisLoading">
@@ -3303,7 +3491,7 @@ ${requestModeLabel}`,
                             <div className="imageAnalysisList">
                               {imageAnalysis.items.map((item) => (
                                 <div
-                                  className={`imageAnalysisItem ${hoveredAnalysisItemId === item.id ? "active" : ""}`}
+                                  className={`imageAnalysisItem ${item.locked ? "selected" : ""} ${hoveredAnalysisItemId === item.id ? "active" : ""}`}
                                   key={item.id}
                                   onMouseEnter={() => setHoveredAnalysisItemId(item.id)}
                                   onMouseLeave={() => setHoveredAnalysisItemId("")}
@@ -3319,10 +3507,10 @@ ${requestModeLabel}`,
                                         checked={Boolean(item.locked)}
                                         onChange={(event) => updateImageAnalysisItem(item.id, { locked: event.target.checked })}
                                       />
-                                      固定
+                                      {imageCreateMode === "reuse" ? "引き継ぐ" : "変更する"}
                                     </label>
                                   </div>
-                                  <textarea value={item.content} onChange={(event) => updateImageAnalysisItem(item.id, { content: event.target.value })} />
+                                  <textarea value={item.content} onChange={(event) => updateImageAnalysisContent(item.id, event.target.value)} />
                                 </div>
                               ))}
                             </div>
