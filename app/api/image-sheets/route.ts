@@ -33,6 +33,7 @@ type Body = {
     aspectRatio?: string;
   };
   createMode: ImageCreateMode;
+  globalInstruction?: string;
   analysisSummary?: string;
   analysisItems?: AnalysisItem[];
   aspectRatio?: string;
@@ -82,10 +83,11 @@ function modeInstruction(mode: ImageCreateMode, selectedItems: AnalysisItem[], u
   if (mode === "reuse") {
     return `
 モード: 構成流用
-- 添付画像1枚目は参考元バナーです。完全な複製や部分修正ではなく、下の「引き継ぐ構成要素」を使って、新しい別バリエーションを生成してください。
+- 参考元バナー画像は添付されません。下の「引き継ぐ構成要素」を設計メモとして使い、選択された商品マスタの画像と情報を主材料にして新しい別バリエーションを生成してください。
 - 元画像の勝ち筋、情報設計、配置の考え方は借りるが、各候補は見た目・コピー・演出に違いを出す。
 - チェックされていない要素は強く引き継がない。必要なら自然に省略・弱める。
-- 参照画像の細部をそのままトレースせず、広告として成立する新案にする。
+- 参照元を思い出し再現するのではなく、商品マスタに合う広告として成立する新案にする。
+- 商品の見た目、ブランド名、価格、訴求事実は「商品情報」と添付された商品画像を優先する。
 
 引き継ぐ構成要素:
 ${selectedItems.map(itemLine).join("\n\n")}
@@ -132,6 +134,7 @@ export async function POST(request: Request) {
     sourceFileName = "",
     sourceMeta = {},
     createMode,
+    globalInstruction = "",
     analysisSummary = "",
     analysisItems = [],
     aspectRatio = "1024x1024",
@@ -149,8 +152,9 @@ export async function POST(request: Request) {
   if (!selectedItems.length) {
     return NextResponse.json({ message: createMode === "reuse" ? "引き継ぐ項目を選んでください" : "変更する項目を選んでください" }, { status: 400 });
   }
-  const sourceImagePath = resolvePublicImagePath(sourceImageUrl);
+  const sourceImagePath = createMode === "edit" ? resolvePublicImagePath(sourceImageUrl) : "";
   const productImagePaths = input.productImages?.map((image) => image.path).filter(Boolean) || (input.productImagePath ? [input.productImagePath] : []);
+  const attachedImagePaths = createMode === "edit" ? [sourceImagePath, ...productImagePaths] : productImagePaths;
   const { columns, rows } = gridForCount(count);
   const totalCandidates = count * runCount;
   const variants = Array.from({ length: totalCandidates }, (_, index) => variantFor(createMode, startIndex, index, selectedItems));
@@ -161,7 +165,9 @@ export async function POST(request: Request) {
   }).join("\n\n");
   const prompt = `
 あなたはWEB広告バナーを作るプロのアートディレクターです。
-添付画像1枚目のバナーと構成分析をもとに、広告バナー候補を生成してください。
+${createMode === "reuse"
+    ? "構成分析と商品マスタ情報をもとに、元画像とは別の広告バナー候補を生成してください。"
+    : "添付画像1枚目の元バナーと構成分析をもとに、広告バナー候補を生成してください。"}
 
 出力形式:
 - PNG画像を必ず${runCount}枚、別々の画像として生成する。
@@ -179,14 +185,20 @@ export async function POST(request: Request) {
 
 ${modeInstruction(createMode, selectedItems, unselectedItems)}
 
+全体指示:
+${globalInstruction.trim() || "なし"}
+
 構成分析サマリー:
 ${analysisSummary || "なし"}
 
-元画像メタ:
+${createMode === "reuse" ? `参考元情報:
+- ファイル名: ${sourceFileName || "不明"}
+- 元比率: ${sourceMeta.aspectRatio || "不明"}
+- 参考元の生成プロンプトや修正指示は使わず、上の構成分析だけを参照する。` : `元画像メタ:
 - ファイル名: ${sourceFileName || "不明"}
 - 元比率: ${sourceMeta.aspectRatio || "不明"}
 - 元の生成/スタイル情報: ${sourceMeta.generationPrompt || "なし"}
-- 元の修正指示: ${sourceMeta.editInstruction || "なし"}
+- 元の修正指示: ${sourceMeta.editInstruction || "なし"}`}
 
 商品情報:
 - ブランド: ${input.brandName || "不明"}
@@ -203,13 +215,13 @@ ${sheetBlocks}
     step: "api-image-sheets",
     status: "start",
     message: "Image mode sheet request received",
-    detail: { createMode, aspectRatio, count, runCount, sourceImageUrl, sourceImagePath, productImagePaths, selectedItems, unselectedItems, prompt },
+    detail: { createMode, aspectRatio, count, runCount, sourceImageUrl, sourceImagePath, productImagePaths, attachedImagePaths, selectedItems, unselectedItems, prompt },
   });
 
   try {
     const generated = await generateImagesWithCodex(prompt, {
       prefix: "image-sheet",
-      images: [sourceImagePath, ...productImagePaths],
+      images: attachedImagePaths,
       timeoutMs: 600_000,
       cancelKey,
       model: codexSettings?.model,

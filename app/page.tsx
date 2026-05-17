@@ -373,6 +373,72 @@ async function postJson<T>(url: string, body: unknown, signal?: AbortSignal): Pr
   return response.json() as Promise<T>;
 }
 
+type BannerAnalysisStreamEvent =
+  | { type: "status"; message?: string }
+  | { type: "summary"; content?: string }
+  | { type: "item"; item?: BannerAnalysisItem }
+  | { type: "final"; result?: BannerAnalysisResult }
+  | { type: "error"; message?: string };
+
+async function postAnalysisStream(
+  body: unknown,
+  handlers: {
+    onStatus?: (message: string) => void;
+    onSummary?: (summary: string) => void;
+    onItem?: (item: BannerAnalysisItem) => void;
+  },
+  signal?: AbortSignal,
+): Promise<BannerAnalysisResult> {
+  const response = await fetch("/api/analyze-banner", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...(body as Record<string, unknown>), stream: true }),
+    signal,
+  });
+  if (!response.ok) throw new Error(await response.text());
+  if (!response.body) return response.json() as Promise<BannerAnalysisResult>;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: BannerAnalysisResult | null = null;
+
+  const handleLine = (rawLine: string) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    const event = JSON.parse(line) as BannerAnalysisStreamEvent;
+    if (event.type === "status" && event.message) handlers.onStatus?.(event.message);
+    if (event.type === "summary" && event.content) handlers.onSummary?.(event.content);
+    if (event.type === "item" && event.item) handlers.onItem?.(event.item);
+    if (event.type === "error") throw new Error(event.message || "構成分析でエラーが発生しました");
+    if (event.type === "final" && event.result) finalResult = event.result;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    for (const line of lines) handleLine(line);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) handleLine(buffer);
+  if (!finalResult) throw new Error("構成分析の最終結果を受信できませんでした");
+  return finalResult;
+}
+
+function hydrateImageAnalysis(result: BannerAnalysisResult, mode: "edit" | "reuse"): BannerAnalysisResult {
+  return {
+    ...result,
+    items: result.items.map((item) => ({
+      ...item,
+      originalContent: item.originalContent || item.content,
+      locked: mode === "reuse" ? true : item.content !== (item.originalContent || item.content),
+    })),
+  };
+}
+
 function formatDebug(debug?: ApiDebug) {
   if (!debug) return "";
   const parts = [];
@@ -520,6 +586,9 @@ export default function Home() {
   const activeCancelKeyRef = useRef("");
   const activeAbortRef = useRef<AbortController | null>(null);
   const stopRequestedRef = useRef(false);
+  const imageAnalysisAbortRef = useRef<AbortController | null>(null);
+  const imageAnalysisRunRef = useRef(0);
+  const imageTargetProductSourceRef = useRef("");
   const libraryUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [sheetUrls, setSheetUrls] = useState<string[]>([]);
   const [sheetVariants, setSheetVariants] = useState<Variant[]>([]);
@@ -548,7 +617,9 @@ export default function Home() {
   const [imageSourceSearch, setImageSourceSearch] = useState("");
   const [imageSourceUrl, setImageSourceUrl] = useState("");
   const [imageCreateMode, setImageCreateMode] = useState<"edit" | "reuse">("reuse");
+  const [imageTargetProductId, setImageTargetProductId] = useState("");
   const [imageCreateAspectRatio, setImageCreateAspectRatio] = useState("1024x1024");
+  const [imageGlobalInstruction, setImageGlobalInstruction] = useState("");
   const [imageAnalysis, setImageAnalysis] = useState<BannerAnalysisResult | null>(null);
   const [imageAnalysisBusy, setImageAnalysisBusy] = useState(false);
   const [hoveredAnalysisItemId, setHoveredAnalysisItemId] = useState("");
@@ -603,8 +674,10 @@ export default function Home() {
   const [marqueeSelection, setMarqueeSelection] = useState<MarqueeSelectionState>({ active: false, startX: 0, startY: 0, currentX: 0, currentY: 0 });
 
   const selectedProduct = products.find((product) => product.id === selectedProductId) || products[0];
+  const imageTargetProduct = products.find((product) => product.id === imageTargetProductId) || null;
   const hoveredAnalysisItem = imageAnalysis?.items.find((item) => item.id === hoveredAnalysisItemId) || null;
   const checkedAnalysisCount = imageAnalysis?.items.filter((item) => item.locked).length || 0;
+  const imageReuseProductMissing = imageCreateMode === "reuse" && !imageTargetProduct;
   const genSettingsWidth = genSettingsWidths[createMode] || DEFAULT_GENERATE_SETTINGS_WIDTHS[createMode];
   const totalCandidates = divisions * sheetRuns;
   const generationTotal = totalCandidates;
@@ -649,6 +722,29 @@ export default function Home() {
       setNotificationPermission(Notification.permission);
     }
   }, []);
+
+  useEffect(() => {
+    if (!imageSourceUrl) return;
+    void analyzeImageSource(imageSourceUrl);
+  }, [imageSourceUrl]);
+
+  useEffect(() => {
+    if (!imageSourceUrl) {
+      imageTargetProductSourceRef.current = "";
+      setImageTargetProductId("");
+      return;
+    }
+    const sourceChanged = imageTargetProductSourceRef.current !== imageSourceUrl;
+    const inferredProduct = productForLibraryUrlMetadata(imageSourceUrl);
+    if (sourceChanged) {
+      imageTargetProductSourceRef.current = imageSourceUrl;
+      setImageTargetProductId(inferredProduct?.id || "");
+      return;
+    }
+    if (!imageTargetProductId && inferredProduct?.id) {
+      setImageTargetProductId(inferredProduct.id);
+    }
+  }, [imageSourceUrl, imageTargetProductId, products, saveTree]);
 
   useEffect(() => {
     newImagesRef.current = newImages;
@@ -1060,8 +1156,19 @@ export default function Home() {
   }
 
   function clearHistoryDisplay() {
+    imageAnalysisAbortRef.current?.abort();
+    imageAnalysisRunRef.current += 1;
     resetGenerated();
     setSelectedHistoryId("");
+    setImageSourceUrl("");
+    imageTargetProductSourceRef.current = "";
+    setImageTargetProductId("");
+    setImageAnalysis(null);
+    setImageAnalysisBusy(false);
+    setHoveredAnalysisItemId("");
+    setImageSourceSearch("");
+    setImageGlobalInstruction("");
+    setImageSourcePickerOpen(false);
     if (typeof window !== "undefined") window.localStorage.removeItem("lastGenerationHistoryId");
     setStatus("新規作成画面に戻しました");
     addLog({ level: "info", title: "履歴表示をクリア", detail: "過去の生成結果の表示を消して、新規作成画面に戻しました" });
@@ -1951,50 +2058,84 @@ ${requestModeLabel}`,
     return files.filter((file) => !query || [file.displayName, file.name, file.url, file.generationPrompt, file.stylePrompt].filter(Boolean).join(" ").toLowerCase().includes(query));
   }
 
-  function selectedImageSourceFile() {
-    if (!imageSourceUrl) return null;
-    return findSavedFileGroup(imageSourceUrl);
+  function selectedImageSourceFile(url = imageSourceUrl) {
+    if (!url) return null;
+    return findSavedFileGroup(url);
   }
 
   function selectImageSource(url: string) {
+    if (url === imageSourceUrl) return;
+    imageAnalysisAbortRef.current?.abort();
+    imageTargetProductSourceRef.current = "";
+    setImageTargetProductId("");
     setImageSourceUrl(url);
     setImageAnalysis(null);
     setHoveredAnalysisItemId("");
   }
 
-  async function analyzeImageSource() {
-    if (!imageSourceUrl || imageAnalysisBusy) return;
+  function reanalyzeImageSource() {
+    if (!imageSourceUrl) return;
+    setImageAnalysis(null);
+    setHoveredAnalysisItemId("");
+    void analyzeImageSource(imageSourceUrl, true);
+  }
+
+  async function analyzeImageSource(url = imageSourceUrl, force = false) {
+    if (!url) return;
+    const runId = imageAnalysisRunRef.current + 1;
+    imageAnalysisRunRef.current = runId;
+    imageAnalysisAbortRef.current?.abort();
+    const controller = new AbortController();
+    imageAnalysisAbortRef.current = controller;
     setImageAnalysisBusy(true);
+    setImageAnalysis({ summary: "", items: [] });
     setStatus("画像を分解中…");
-    addLog({ level: "info", title: "画像分解開始", detail: imageSourceUrl });
+    addLog({ level: "info", title: "画像分解開始", detail: url });
     try {
-      const sourceFile = selectedImageSourceFile();
-      const result = await postJson<BannerAnalysisResult>("/api/analyze-banner", {
-        imageUrl: imageSourceUrl,
-        fileName: sourceFile?.displayName || sourceFile?.name || fileNameFromUrl(imageSourceUrl),
+      const sourceFile = selectedImageSourceFile(url);
+      const analysisRequest = {
+        imageUrl: url,
+        fileName: sourceFile?.displayName || sourceFile?.name || fileNameFromUrl(url),
         meta: {
           generationPrompt: sourceFile?.generationPrompt || sourceFile?.stylePrompt || "",
           editInstruction: sourceFile?.editInstruction || "",
           aspectRatio: sourceFile?.aspectRatio || "",
         },
         codexSettings: stepCodexSettings.ideas,
-      });
-      setImageAnalysis({
-        ...result,
-        items: result.items.map((item) => ({
-          ...item,
-          originalContent: item.originalContent || item.content,
-          locked: imageCreateMode === "reuse",
-        })),
-      });
-      setStatus("画像の分解が完了しました");
+        force,
+      };
+      let partialSummary = "";
+      const partialItems: BannerAnalysisItem[] = [];
+      const result = await postAnalysisStream(analysisRequest, {
+        onStatus: (message) => {
+          if (imageAnalysisRunRef.current === runId) setStatus(message);
+        },
+        onSummary: (summary) => {
+          if (imageAnalysisRunRef.current !== runId) return;
+          partialSummary = summary;
+          setImageAnalysis(hydrateImageAnalysis({ summary: partialSummary, items: partialItems }, imageCreateMode));
+        },
+        onItem: (item) => {
+          if (imageAnalysisRunRef.current !== runId) return;
+          partialItems.push(item);
+          setImageAnalysis(hydrateImageAnalysis({ summary: partialSummary, items: partialItems }, imageCreateMode));
+          setStatus(`構成を分析中… ${partialItems.length}項目`);
+        },
+      }, controller.signal);
+      if (imageAnalysisRunRef.current !== runId) return;
+      setImageAnalysis(hydrateImageAnalysis(result, imageCreateMode));
+      setStatus(`画像の分解が完了しました (${result.items.length}項目)`);
       addLog({ level: "success", title: "画像分解完了", detail: `${result.items.length}項目` });
     } catch (error) {
+      if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
       setStatus(`画像分解エラー: ${message}`);
       addLog({ level: "error", title: "画像分解エラー", detail: message });
     } finally {
-      setImageAnalysisBusy(false);
+      if (imageAnalysisRunRef.current === runId) {
+        setImageAnalysisBusy(false);
+        imageAnalysisAbortRef.current = null;
+      }
     }
   }
 
@@ -2018,7 +2159,7 @@ ${requestModeLabel}`,
   }
 
   function updateImageAnalysisContent(id: string, content: string) {
-    updateImageAnalysisItem(id, imageCreateMode === "edit" ? { content, locked: true } : { content });
+    updateImageAnalysisItem(id, { content, locked: true });
   }
 
   function setAllImageAnalysisChecks(checked: boolean) {
@@ -2041,8 +2182,14 @@ ${requestModeLabel}`,
       setStatus(imageCreateMode === "reuse" ? "引き継ぐ項目を選んでください" : "変更する項目を選んでください");
       return;
     }
+    if (imageCreateMode === "reuse" && !imageTargetProduct) {
+      setStatus("構成流用する商品を選んでください");
+      return;
+    }
     const sourceFile = selectedImageSourceFile();
-    const sourceProductInput = productInputForLibraryUrl(imageSourceUrl);
+    const sourceProductInput = imageCreateMode === "reuse" && imageTargetProduct
+      ? productInputForProduct(imageTargetProduct)
+      : productInputForLibraryUrl(imageSourceUrl);
     const targetCount = generationTotal;
     const chunkDivision = divisions;
     const plannedSheets = Math.ceil(targetCount / chunkDivision);
@@ -2073,6 +2220,7 @@ checked=${checkedItems.length}/${imageAnalysis.items.length}
 aspect=${imageCreateAspectRatio}
 count=${targetCount}`,
     });
+    const trimmedImageGlobalInstruction = imageGlobalInstruction.trim();
     try {
       while (variantOffset < targetCount) {
         if (stopRequestedRef.current) throw new Error("ユーザーが生成を停止しました");
@@ -2091,6 +2239,7 @@ count=${targetCount}`,
             aspectRatio: sourceFile?.aspectRatio || "",
           },
           createMode: imageCreateMode,
+          globalInstruction: trimmedImageGlobalInstruction,
           analysisSummary: imageAnalysis.summary || "",
           analysisItems: imageAnalysis.items,
           aspectRatio: imageCreateAspectRatio,
@@ -2229,17 +2378,53 @@ count=${targetCount}`,
     return group?.versions?.find((version) => version.url === url) || (group?.url === url ? group : null);
   }
 
-  function productInputForLibraryUrl(url: string): ProductInput {
+  function productMetadataForLibraryUrl(url: string) {
     const group = findSavedFileGroup(url);
     const sourceVersion = findSavedFileVersion(url);
     const rootVersion = group?.versions?.find((version) => !version.parentUrl) || group;
-    const productMeta = rootVersion?.product?.productName ? rootVersion.product : sourceVersion?.product;
+    return rootVersion?.product?.productName ? rootVersion.product : sourceVersion?.product;
+  }
+
+  function productForMetadata(productMeta?: SavedFile["product"]) {
+    const productName = productMeta?.productName?.trim();
+    if (!productName) return null;
+    const brandName = productMeta?.brandName?.trim() || "";
+    return products.find((product) => {
+      const sameName = product.name === productName;
+      const sameBrand = !brandName || product.brandName === brandName;
+      return sameName && sameBrand;
+    }) || products.find((product) => product.name === productName) || null;
+  }
+
+  function productForLibraryUrlMetadata(url: string) {
+    return productForMetadata(productMetadataForLibraryUrl(url));
+  }
+
+  function productInputForProduct(product: Product): ProductInput {
+    const firstImage = product.images?.[0];
+    const productPriceInfo = product.priceInfo?.trim() || "";
+    return {
+      productId: product.id,
+      brandName: product.brandName,
+      productName: product.name,
+      format: "WEB広告バナー候補",
+      productImageUrl: firstImage?.url || product.imageUrl,
+      productImagePath: firstImage?.path || product.imagePath,
+      productImages: product.images || [],
+      notes: product.notes || "",
+      priceInfo: productPriceInfo,
+      priceMode: productPriceInfo ? "all" : "none",
+    };
+  }
+
+  function productInputForLibraryUrl(url: string): ProductInput {
+    const productMeta = productMetadataForLibraryUrl(url);
     const folderParts = folderPathFromSavedUrl(url).split("/").filter(Boolean);
     const folderBrand = folderParts[0] || "";
     const folderProduct = folderParts[1] || "";
     const productName = productMeta?.productName || folderProduct || "バナー";
     const brandName = productMeta?.brandName || folderBrand || "";
-    const matchedProduct = products.find((product) => {
+    const matchedProduct = productForMetadata(productMeta) || products.find((product) => {
       const sameName = product.name === productName;
       const sameBrand = !brandName || product.brandName === brandName;
       return sameName && sameBrand;
@@ -3367,14 +3552,11 @@ count=${targetCount}`,
                               </div>
                               <div className="imageSourcePreviewMeta">
                                 <strong>{selectedImageSourceFile()?.displayName || selectedImageSourceFile()?.name || fileNameFromUrl(imageSourceUrl)}</strong>
-                                <button type="button" onClick={() => setImageSourcePickerOpen(true)}>選び直す</button>
+                                <div className="imageSourcePreviewActions">
+                                  <button type="button" onClick={() => setImageSourcePickerOpen(true)}>選び直す</button>
+                                  <button type="button" disabled={imageAnalysisBusy} onClick={reanalyzeImageSource}>再分析</button>
+                                </div>
                               </div>
-                            </div>
-                            <div className="imageAnalysisNextStep">
-                              <button className="imageAnalysisStartButton" type="button" disabled={imageAnalysisBusy} onClick={analyzeImageSource}>
-                                {imageAnalysisBusy ? <span className="miniSpinner" aria-hidden="true" /> : null}
-                                {imageAnalysisBusy ? "分析中..." : "構成を分析する"}
-                              </button>
                             </div>
                           </>
                         ) : (
@@ -3389,7 +3571,7 @@ count=${targetCount}`,
                               <button
                                 className={imageCreateMode === "reuse" ? "active" : ""}
                                 type="button"
-                                title="構図やテイストを参考にして、新しい別案を作ります"
+                                title="勝ちクリエイティブの強い要素だけを残して、新しい別案を作ります"
                                 onClick={() => switchImageCreateMode("reuse")}
                               >
                                 構成流用
@@ -3405,10 +3587,35 @@ count=${targetCount}`,
                             </div>
                             <small className="imageModeHelp">
                               {imageCreateMode === "reuse"
-                                ? "チェックした構成要素を使って、別バリエーションを新しく作る。"
+                                ? "勝ちクリエイティブの良い要素だけをキープして、新しい別バリエーションを作る。"
                                 : "元画像をベースに、チェックした部分だけ編集する。"}
                             </small>
                           </div>
+                          {imageCreateMode === "reuse" ? (
+                            <label className="imageTargetProductControl">対象商品
+                              <select value={imageTargetProductId} onChange={(event) => setImageTargetProductId(event.target.value)}>
+                                <option value="">商品を選択してください</option>
+                                {products.map((product) => (
+                                  <option value={product.id} key={product.id}>
+                                    {[product.brandName, product.name].filter(Boolean).join(" / ")}
+                                  </option>
+                                ))}
+                              </select>
+                              {imageSourceUrl && !imageTargetProductId ? (
+                                <small className="imageModeHelp warn">商品メタデータがない画像です。商品を選んでください。</small>
+                              ) : null}
+                            </label>
+                          ) : null}
+                          <label className="imageGlobalInstructionControl">全体指示
+                            <textarea
+                              value={imageGlobalInstruction}
+                              onChange={(event) => setImageGlobalInstruction(event.target.value)}
+                              placeholder={imageCreateMode === "reuse"
+                                ? "例: 高級感を少し強める、価格は目立たせる、余白多め"
+                                : "例: コピーだけ短くする、商品はそのまま、背景を明るく"}
+                            />
+                            <small className="imageModeHelp">構成項目とは別に、全体へ反映したい指示を入れられます。</small>
+                          </label>
                           <label>生成比率
                             <select value={imageCreateAspectRatio} onChange={(event) => setImageCreateAspectRatio(event.target.value)}>
                               <option value="1024x1024">1:1</option>
@@ -3448,11 +3655,13 @@ count=${targetCount}`,
                               <small>基本は1枚ずつ直列生成します。多めに作る時も止まりにくい設定です。</small>
                             </div>
                           </details>
-                          <button className="primary imageGenerateButton" type="button" disabled={busy || !imageSourceUrl || !imageAnalysis || !checkedAnalysisCount} onClick={generateImageModeBanners}>
+                          <button className="primary imageGenerateButton" type="button" disabled={busy || !imageSourceUrl || !imageAnalysis || !checkedAnalysisCount || imageReuseProductMissing} onClick={generateImageModeBanners}>
                             {!imageSourceUrl
                               ? "画像を選んでください"
                               : !imageAnalysis
                                 ? "構成分析後に作成"
+                                : imageReuseProductMissing
+                                  ? "商品を選んでください"
                                 : !checkedAnalysisCount
                                   ? imageCreateMode === "reuse" ? "引き継ぐ項目を選んでください" : "変更項目を選んでください"
                                 : imageCreateMode === "reuse"
@@ -3462,32 +3671,26 @@ count=${targetCount}`,
                         </div>
                       </div>
                       <div className="imageModeAnalysisPane">
-                        <div className="imageAnalysisWorkspaceHeader compact">
-                          <div>
-                            <h2>構成分析</h2>
-                            <p>{imageAnalysis ? "項目にカーソルを合わせると、左の画像上で該当範囲を確認できます。" : "画像を選んで構成分析を始めると、ここに結果が出ます。"}</p>
-                          </div>
-                          {imageAnalysis ? (
-                            <div className="analysisBulkActions">
-                              <button type="button" onClick={() => setAllImageAnalysisChecks(true)}>
-                                {imageCreateMode === "reuse" ? "すべて引き継ぐ" : "すべて変更する"}
-                              </button>
-                              <button type="button" onClick={() => setAllImageAnalysisChecks(false)}>すべて外す</button>
-                            </div>
-                          ) : null}
-                        </div>
                         {imageAnalysisBusy ? (
                           <div className="imageAnalysisLoading">
                             <div className="spinner" />
                             <div>
                               <strong>構成を分析しています</strong>
-                              <p>コピー、価格、商品、装飾、色、レイアウトを分解中です。</p>
                             </div>
                           </div>
                         ) : null}
                         {imageAnalysis ? (
                           <div className="imageAnalysisPanel workspace">
-                            {imageAnalysis.summary ? <p className="imageAnalysisSummary">{imageAnalysis.summary}</p> : null}
+                            <div className="analysisBulkActions analysisCheckToolbar" aria-label="構成分析のチェック操作">
+                              <button type="button" onClick={() => setAllImageAnalysisChecks(true)}>
+                                <span className="checkIcon checked" aria-hidden="true" />
+                                全てチェックする
+                              </button>
+                              <button type="button" onClick={() => setAllImageAnalysisChecks(false)}>
+                                <span className="clearCheckIcon" aria-hidden="true" />
+                                全てチェック外す
+                              </button>
+                            </div>
                             <div className="imageAnalysisList">
                               {imageAnalysis.items.map((item) => (
                                 <div
@@ -3516,7 +3719,7 @@ count=${targetCount}`,
                             </div>
                           </div>
                         ) : (
-                          <div className="empty tall">{imageSourceUrl ? "左の「構成を分析する」で結果を表示します" : "画像を選ぶと、ここで構成分析できます"}</div>
+                          <div className="empty tall">{imageSourceUrl ? "構成分析を開始しています" : "画像を選ぶと、自動で構成分析します"}</div>
                         )}
                       </div>
                     </div>
@@ -3744,7 +3947,7 @@ count=${targetCount}`,
                             className={imageSourceUrl === item.url ? "active" : ""}
                             type="button"
                             key={item.path}
-                            onClick={() => selectImageSource(item.url)}
+                            onClick={() => { selectImageSource(item.url); setHoverPreview(null); setImageSourcePickerOpen(false); }}
                             onDoubleClick={() => { selectImageSource(item.url); setHoverPreview(null); setImageSourcePickerOpen(false); }}
                             onMouseEnter={(event) => showHoverPreview(event, item.url, libraryCaption(item))}
                             onMouseMove={(event) => showHoverPreview(event, item.url, libraryCaption(item))}

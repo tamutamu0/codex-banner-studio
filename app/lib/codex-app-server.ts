@@ -22,6 +22,7 @@ type CodexRunOptions = {
   model?: string;
   effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
   serviceTier?: "fast" | "auto";
+  onTextDelta?: (delta: string, textSoFar: string) => void;
 };
 
 export type CodexGeneratedImage = {
@@ -200,7 +201,7 @@ function summarizeRpcMessage(msg: RpcMessage) {
   };
 }
 
-export async function runCodexTurnDetailed({ prompt, images = [], timeoutMs = 180_000, logLabel = "codex-turn", jobId = `${logLabel}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, cancelKey, model, effort, serviceTier }: CodexRunOptions): Promise<CodexTurnResult> {
+export async function runCodexTurnDetailed({ prompt, images = [], timeoutMs = 180_000, logLabel = "codex-turn", jobId = `${logLabel}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, cancelKey, model, effort, serviceTier, onTextDelta }: CodexRunOptions): Promise<CodexTurnResult> {
   const startedAt = Date.now();
   const codexBin = getCodexBin();
   const supportedServiceTier = serviceTier === "fast" ? "fast" : undefined;
@@ -317,6 +318,7 @@ export async function runCodexTurnDetailed({ prompt, images = [], timeoutMs = 18
       }
       if (msg.method === "item/agentMessage/delta" && typeof msg.params?.delta === "string") {
         finalText += msg.params.delta;
+        onTextDelta?.(msg.params.delta, finalText);
       }
       if (msg.method === "turn/completed") {
         const status = msg.params?.turn?.status;
